@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: dtos
+Version: 0.1.0
+Summary: DTOs
+License: MIT
+Author: Janek Nouvertné
+Author-email: provinzkraut@posteo.de
+Requires-Python: >=3.11,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Description-Content-Type: text/markdown
+
+# DTOs
