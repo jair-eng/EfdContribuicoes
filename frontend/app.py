@@ -1,7 +1,26 @@
 import streamlit as st
 import requests
-from urllib.parse import urljoin
 import pandas as pd
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]  # pasta Projeto_Sped
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from ui_utils import goto, cached_empresas, cached_arquivos, cached_versoes, cached_resumo_versao, \
+    cached_apontamentos, clear_after_confirm, cached_empresa_resumo, show_error, clear_after_workflow, parse_bool, get, \
+    post, patch, api_url, TIMEOUT
+from ui_utils import cached_health
+from c170_editor import render_editor_c170
+
+
+import sys, os
+print("CWD:", os.getcwd())
+print("SYSPATH[0]:", sys.path[0])
+print("SYSPATH:", sys.path)
+
+st.set_option("client.showErrorDetails", True)
+
 
 
 st.set_page_config(page_title="SPED Créditos", layout="wide")
@@ -21,27 +40,8 @@ for k, default in {
 # --- Config ---
 DEFAULT_API = "http://127.0.0.1:8000"
 API_BASE = st.sidebar.text_input("API Base", value=DEFAULT_API).rstrip("/")
-TIMEOUT = 300 # 5 min
-
-def parse_bool(v):
-    if v is True or v is False:
-        return v
-    if v is None:
-        return False
-    if isinstance(v, (int, float)):
-        return bool(v)
-    if isinstance(v, str):
-        s = v.strip().lower()
-        if s in ("true", "1", "sim", "yes"):
-            return True
-        if s in ("false", "0", "nao", "não", "no", ""):
-            return False
-    return False
 
 
-def goto(target: str):
-    st.session_state["page"] = target
-    st.rerun()
 
 
 # --- Session State (único lugar) ---
@@ -59,114 +59,6 @@ if "selected_versao_id" not in st.session_state:
 
 if "menu" not in st.session_state:
     st.session_state["menu"] = "Home"
-
-
-def api_url(path: str) -> str:
-    return urljoin(API_BASE + "/", path.lstrip("/"))
-
-
-def show_error(r: requests.Response):
-    try:
-        st.error(f"Erro {r.status_code}: {r.json()}")
-    except Exception:
-        st.error(f"Erro {r.status_code}: {r.text}")
-
-
-def get(path, params=None):
-    r = requests.get(api_url(path), params=params, timeout=TIMEOUT)
-    if r.status_code >= 400:
-        show_error(r)
-        return None
-    return r
-
-
-def post(path, json=None, files=None):
-    r = requests.post(api_url(path), json=json, files=files, timeout=TIMEOUT)
-    if r.status_code >= 400:
-        show_error(r)
-        return None
-    return r
-
-
-def patch(path, json=None):
-    r = requests.patch(api_url(path), json=json, timeout=TIMEOUT)
-    if r.status_code >= 400:
-        show_error(r)
-        return None
-    return r
-
-
-# ---------------------------
-# Cache leve (somente GETs repetidos)
-# ---------------------------
-@st.cache_data(ttl=300)  # 5 min
-def cached_health(api_base: str):
-    r = requests.get(f"{api_base}/health", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
-
-
-@st.cache_data(ttl=120)  # 2 min
-def cached_empresas(api_base: str):
-    r = requests.get(f"{api_base}/browse/empresas", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or []
-
-@st.cache_data(ttl=30)
-def cached_empresa_resumo(api_base: str, empresa_id: int):
-    r = requests.get(f"{api_base}/empresa/{empresa_id}/resumo", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or {}
-
-
-@st.cache_data(ttl=120)  # 2 min
-def cached_arquivos(api_base: str, empresa_id: int):
-    r = requests.get(f"{api_base}/browse/empresas/{empresa_id}/arquivos", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or []
-
-
-@st.cache_data(ttl=120)  # 2 min
-def cached_versoes(api_base: str, arquivo_id: int):
-    r = requests.get(f"{api_base}/browse/arquivos/{arquivo_id}/versoes", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or []
-
-
-@st.cache_data(ttl=30)  # curto
-def cached_resumo_versao(api_base: str, versao_id: int):
-    r = requests.get(f"{api_base}/workflow/versao/{versao_id}/resumo", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or {}
-
-
-@st.cache_data(ttl=15)  # bem curto
-
-def cached_apontamentos(api_base: str, versao_id: int, bust: int):
-    r = requests.get(f"{api_base}/workflow/versao/{versao_id}/apontamentos", timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json() or []
-
-
-
-def clear_after_confirm():
-    cached_empresas.clear()
-    cached_arquivos.clear()
-    cached_versoes.clear()
-    cached_resumo_versao.clear()
-    cached_apontamentos.clear()
-
-
-def clear_after_workflow():
-    cached_resumo_versao.clear()
-    cached_apontamentos.clear()
-    st.cache_data.clear()
-
-
-def clear_after_retificar():
-    cached_versoes.clear()
-    cached_resumo_versao.clear()
-    cached_apontamentos.clear()
 
 
 # --- Layout ---
@@ -188,7 +80,8 @@ PAGES = [
     "1 — Selecionar Empresa",
     "2 — Selecionar Versão",
     "3 — Revisar & Apontamentos",
-    "4 — Exportar",
+    "4 — C170 - Editor",
+    "5 — Exportar",
 ]
 
 if "page" not in st.session_state:
@@ -587,6 +480,7 @@ elif page == "2 — Selecionar Versão":
             index=0
         )
 
+
     def _ok_row(r: dict) -> bool:
         stt = str(r.get("status", "") or "").upper()
         if filtro_status != "(Todos)" and stt != filtro_status:
@@ -657,7 +551,6 @@ elif page == "2 — Selecionar Versão":
 
     st.dataframe(table_rows, use_container_width=True, hide_index=True)
 
-    st.divider()
 
     # -----------------------------
     # Seleção para revisar (1 clique)
@@ -800,139 +693,28 @@ elif page == "2 — Selecionar Versão":
     # -----------------------------
     # Export em lote (ZIP)
     # -----------------------------
-    st.subheader("📦 Export em lote (ZIP)")
 
-    # --- controles do export em lote ---
-    cA, cB, cC, cD = st.columns([1.2, 1.2, 2.2, 2.2])
+    st.markdown("### 📦 Exportação em lote (ZIP)")
 
-    with cA:
-        only_exportable = st.checkbox("Somente exportáveis", value=True)
-    with cB:
-        show_only_selected = st.checkbox("Mostrar só selecionadas", value=False)
+    default_zip = ["VALIDADA", "EXPORTADA"]
+    if filtro_status in ("VALIDADA", "EXPORTADA"):
+        default_zip = [filtro_status]
 
-    # estado do editor (persistência entre reruns)
-    state_key = "zip_select_state"
-    if state_key not in st.session_state:
-        st.session_state[state_key] = {}  # {versao_id: bool}
-
-
-    # helper: exportável?
-    def _is_exportable(status: str) -> bool:
-        s = (status or "").upper().strip()
-        return s in ("VALIDADA", "EXPORTADA")
-
-
-    # monta linhas
-    rows = []
-    skipped = 0
-    for r in filtered_sorted:
-        vid = int(r["versao_id"])
-        status = (r.get("status") or "—")
-        exportable = _is_exportable(status)
-
-        if only_exportable and not exportable:
-            skipped += 1
-            continue
-
-        p = (r.get("pendentes_por_prioridade") or {})
-        rows.append({
-            "Selecionar": bool(st.session_state[state_key].get(vid, False)),
-            "Versao ID": vid,
-            "Período": r.get("periodo", "—"),
-            "Arquivo": r.get("nome_arquivo", "—"),
-            "Status": status,
-            "Pendentes": int(r.get("pendentes", 0) or 0),
-            "A": int(p.get("alta", 0) or 0),
-            "M": int(p.get("media", 0) or 0),
-            "B": int(p.get("baixa", 0) or 0),
-            "Impacto": float(r.get("impacto_estimado_total", 0) or 0),
-        })
-
-    df = pd.DataFrame(rows)
-
-    # aviso se filtrou
-    if skipped and only_exportable:
-        st.caption(f"🔎 {skipped} versão(ões) foram ocultadas por não serem exportáveis (status ≠ VALIDADA/EXPORTADA).")
-
-    # botões selecionar/limpar (atuam no estado)
-    b1, b2, b3, b4 = st.columns([1.2, 1.2, 2.6, 2.0])
-
-    with b1:
-        if st.button("✅ Selecionar todos", disabled=df.empty):
-            for vid in df["Versao ID"].astype(int).tolist():
-                st.session_state[state_key][int(vid)] = True
-            st.rerun()
-
-    with b2:
-        if st.button("🧹 Limpar", disabled=df.empty):
-            for vid in df["Versao ID"].astype(int).tolist():
-                st.session_state[state_key][int(vid)] = False
-            st.rerun()
-
-    with b3:
-        st.caption("Marque/desmarque no grid abaixo e depois clique em **Gerar ZIP**.")
-
-    # aplica “mostrar só selecionadas”
-    if show_only_selected and not df.empty:
-        df = df[df["Selecionar"] == True].copy()
-
-    # editor
-    df_edit = st.data_editor(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="fixed",
-        column_config={
-            "Selecionar": st.column_config.CheckboxColumn("Selecionar", default=False),
-            "Versao ID": st.column_config.NumberColumn("Versão ID", disabled=True),
-            "Impacto": st.column_config.NumberColumn("Impacto", format="R$ %.2f", disabled=True),
-        },
-        disabled=["Versao ID", "Período", "Arquivo", "Status", "Pendentes", "A", "M", "B", "Impacto"],
-        key="export_zip_editor_v2",
+    status_sel = st.multiselect(
+        "Status das versões",
+        ["VALIDADA", "EXPORTADA"],
+        default=default_zip,
+        key="zip_status_sel",
     )
 
-    # persistir seleção de volta no state
-    if not df_edit.empty:
-        for _, row in df_edit.iterrows():
-            vid = int(row["Versao ID"])
-            st.session_state[state_key][vid] = bool(row["Selecionar"])
+    # empresa_id precisa estar selecionada
+    params = "&".join([f"status={s}" for s in status_sel]) if status_sel else "status=VALIDADA&status=EXPORTADA"
+    url_zip = f"{API_BASE}/export/empresa/{empresa_id}/versoes-zip?{params}"
+    st.link_button("📦 Baixar ZIP das versões", url_zip)
 
-    # calcular selecionadas (com base no state, não só na tabela filtrada)
-    all_selected_ids = [vid for vid, sel in st.session_state[state_key].items() if sel]
-    all_selected_ids = sorted(set(int(x) for x in all_selected_ids))
+    st.caption("Gera um ZIP com todas as versões da empresa nos status selecionados (VALIDADA/EXPORTADA).")
+    st.divider()
 
-    # resumo seleção
-    cS1, cS2 = st.columns([1, 3])
-    with cS1:
-        gerar = st.button("📦 Gerar ZIP", disabled=(len(all_selected_ids) == 0))
-    with cS2:
-        if all_selected_ids:
-            st.caption(
-                f"Selecionadas: **{len(all_selected_ids)}** versão(ões) — "
-                f"{all_selected_ids[:10]}{'...' if len(all_selected_ids) > 10 else ''}"
-            )
-        else:
-            st.caption("Selecione pelo menos 1 versão para exportar.")
-
-    # gerar ZIP
-    if gerar:
-        try:
-            resp = requests.post(
-                f"{API_BASE}/export/versoes-zip",
-                json={"versao_ids": all_selected_ids},
-                timeout=TIMEOUT,
-            )
-            if resp.status_code >= 400:
-                show_error(resp)
-            else:
-                st.download_button(
-                    "⬇️ Baixar ZIP",
-                    data=resp.content,
-                    file_name="SPED_exports.zip",
-                    mime="application/zip",
-                )
-        except Exception as e:
-            st.error(f"Falha ao gerar ZIP: {e}")
 
 # ===========================
 # 3 — REVISAR & APONTAMENTOS
@@ -1057,20 +839,7 @@ elif page == "3 — Revisar & Apontamentos":
         # ---------------------------
         # Carrega + normaliza apontamentos (fonte da verdade p/ contagem)
         # ---------------------------
-        def _parse_bool(v):
-            if v is True or v is False:
-                return v
-            if v is None:
-                return False
-            if isinstance(v, (int, float)):
-                return bool(v)
-            if isinstance(v, str):
-                s = v.strip().lower()
-                if s in ("true", "1", "sim", "yes"):
-                    return True
-                if s in ("false", "0", "nao", "não", "no", ""):
-                    return False
-            return False
+
 
 
         def normalize_apontamento(item, idx: int):
@@ -1092,7 +861,7 @@ elif page == "3 — Revisar & Apontamentos":
             if not isinstance(item, dict):
                 return None
 
-            resolvido = _parse_bool(item.get("resolvido"))
+            resolvido = parse_bool(item.get("resolvido"))
             status = "Resolvido" if resolvido else "Pendente"
             reg = item.get("registro") or {}
 
@@ -1243,45 +1012,47 @@ elif page == "3 — Revisar & Apontamentos":
         if not pendentes:
             st.caption("Nenhum apontamento pendente.")
         else:
-            if st.button(f"✅ Resolver TODOS os pendentes ({len(pendentes)})", key="resolver_todos"):
+            if st.button("✅ Resolver TODOS os pendentes", key="resolver_todos"):
+                versao_id = int(st.session_state.selected_versao_id)
 
-                versao_id = st.session_state.selected_versao_id
+                resp = patch(f"/workflow/versao/{versao_id}/resolver_todos", json={})
+                if not resp:
+                    st.stop()  # utils.show_error já mostrou o 500/400
 
-                ids = [
-                    int(a["id"])
-                    for a in pendentes
-                    if a.get("id") and str(a.get("id")).isdigit()
-                ]
+                data = resp.json() or {}
+                clear_after_workflow()
 
-                payload = {
-                    "versao_id": int(versao_id),
-                    "to_resolver": ids,
-                    "to_reabrir": []
-                }
+                updated = int(data.get("updated_total", 0) or 0)
+                rest = data.get("pendentes_restantes", "?")
 
-                try:
-                    resp = patch("/workflow/apontamento/batch", json=payload)
+                st.success(f"{updated} resolvidos. Pendentes restantes: {rest}")
+                st.rerun()
 
-                    if not resp:
-                        st.error("Erro ao aplicar alterações em lote.")
-                        st.stop()
+        # --- SEMPRE avalia confirmar revisão (fora do if acima)
+        pendentes_erro = int(resumo.get("pendentes_erro", 0) or 0)
+        status_versao = str(resumo.get("status") or "")  # ou de onde você pega o status
 
-                    # ✅ Response -> dict
-                    data = resp.json() or {}
+        if status_versao == "EM_REVISAO" and pendentes_erro == 0:
+            if st.button("✅ Confirmar revisão", key="confirmar_revisao"):
+                resp = post(f"/workflow/versao/{versao_id}/confirmar-revisao")
+                data = resp.json() or {}
+                vrid = data.get("versao_revisada_id")
 
-                    updated = int(data.get("updated_total", 0) or 0)
-                    pendentes_restantes = data.get("pendentes_restantes", "?")
+                if not vrid:
+                    st.error(f"Resposta sem versao_revisada_id: {data}")
+                    st.stop()
 
-                    clear_after_workflow()
+                # ✅ troca para a versão revisada
+                st.session_state.selected_versao_id = int(vrid)
 
-                    st.success(
-                        f"{updated} apontamentos resolvidos. "
-                        f"Pendentes restantes: {pendentes_restantes}"
-                    )
-                    st.rerun()
+                # ⚠️ se você tem selectbox de versão com key, atualize ela também:
+                # st.session_state["versao_select"] = int(vrid)
 
-                except Exception as e:
-                    st.error(f"Falha ao aplicar alterações: {e}")
+                clear_after_workflow()
+                st.success(f"Revisão confirmada. Versão revisada: {int(vrid)}")
+                st.rerun()
+        else:
+            st.info(f"Confirmação indisponível. Status={status_versao}, pendentes_erro={pendentes_erro}")
 
 
         # ---------------------------
@@ -1366,6 +1137,11 @@ elif page == "3 — Revisar & Apontamentos":
                 if raw_meta.get("bloqueada_por_erro") is True:
                     badges.append("⚫ BLOQUEADA")
 
+                # ✅ Revisão aplicada (mesmo após reprocess)
+                if a.get("tem_revisao") is True:
+                    rid = a.get("revisao_id")
+                    badges.append(f"✅ REVISADO{f' #{rid}' if rid else ''}")
+
                 badge_txt = " | ".join(badges)
 
                 # HEADER
@@ -1392,14 +1168,15 @@ elif page == "3 — Revisar & Apontamentos":
                 else:
                     st.caption("Sem detalhes.")
 
-                meta_cols = st.columns(4)
+                meta_cols = st.columns(5)
                 meta_cols[0].write(f"**Registro:** {a.get('registro', '—')}")
                 meta_cols[1].write(f"**Linha:** {a.get('linha', '—')}")
                 meta_cols[2].write(f"**Código:** {a.get('campo', '—')}")
                 meta_cols[3].write(f"**Prioridade:** {a.get('prioridade', '—')}")
+                meta_cols[4].write(f"**Revisão:** {'Sim' if a.get('tem_revisao') else 'Não'}")
 
                 # ações
-                b1, b2 = st.columns(2)
+                b1, b2, b3 = st.columns([1, 1, 1.4])
                 with b1:
                     if a_status != "Resolvido":
                         if st.button("✅ Resolver", key=f"resolver_{a_id}"):
@@ -1419,6 +1196,12 @@ elif page == "3 — Revisar & Apontamentos":
                                     clear_after_workflow()
                                     st.success("Reaberto.")
                                     st.rerun()
+
+                with b3:
+                    vr = a.get("versao_revisada_id")
+                    if a.get("tem_revisao") and vr:
+                        url = f"{API_BASE}/export/versao/{int(vr)}"
+                        st.link_button(f"⬇️ Baixar revisado (v{vr})", url)
 
                 with st.expander("Ver JSON", expanded=False):
                     st.json(a.get("_raw", a))
@@ -1577,7 +1360,7 @@ elif page == "3 — Revisar & Apontamentos":
                     if ap_id is None:
                         invalid_base += 1
                         continue
-                    base_map[ap_id] = _parse_bool(row.get("Resolvido"))
+                    base_map[ap_id] = parse_bool(row.get("Resolvido"))
 
                 curr_map = {}
                 invalid_curr = 0
@@ -1586,7 +1369,7 @@ elif page == "3 — Revisar & Apontamentos":
                     if ap_id is None:
                         invalid_curr += 1
                         continue
-                    curr_map[ap_id] = _parse_bool(row.get("Resolvido"))
+                    curr_map[ap_id] = parse_bool(row.get("Resolvido"))
 
                 # (opcional) log no Streamlit se tiver inválidos
                 if invalid_base or invalid_curr:
@@ -1679,7 +1462,7 @@ elif page == "3 — Revisar & Apontamentos":
                                 "to_reabrir": pending.get("to_reabrir", []),
                             }
 
-                            url_batch = f"{API_BASE}/workflow/apontamentos/batch"
+                            url_batch = f"{API_BASE}/workflow/apontamento/batch"
                             rb = requests.patch(url_batch, json=batch_payload, timeout=60)
 
                             if not rb.ok:
@@ -1711,18 +1494,43 @@ elif page == "3 — Revisar & Apontamentos":
                                     st.code(rc.text)
                                 st.stop()
 
+                            # tenta ler a resposta
+                            confirm_resp = {}
+                            try:
+                                confirm_resp = rc.json() or {}
+                            except Exception:
+                                confirm_resp = {}
+
+                            versao_revisada_id = confirm_resp.get("versao_revisada_id") or confirm_resp.get(
+                                "versao_id_revisada")
+
+                            # feedback
+                            msg_extra = ""
+                            if versao_revisada_id:
+                                try:
+                                    vr_int = int(versao_revisada_id)
+                                    msg_extra = f" Versão revisada criada: v{vr_int}."
+                                    # ✅ muda para a versão revisada para exportar o arquivo com alterações materializadas
+                                    st.session_state.selected_versao_id = vr_int
+                                except Exception:
+                                    # se vier algo estranho, só ignora
+                                    pass
+
                             st.success(
                                 f"Alterações aplicadas: {batch_resp.get('updated_total', 0)}. "
                                 f"Pendentes restantes: {pendentes_restantes}. "
-                                f"Revisão confirmada! Indo para Exportar..."
+                                f"Revisão confirmada!{msg_extra} Indo para Exportar..."
                             )
 
                             # limpa o que estava preparado para não reaplicar sem querer
                             st.session_state.pop(prep_key, None)
 
                             clear_after_workflow()
+
+                            # ✅ vai para exportar
                             st.session_state.page = "4 — Exportar"
                             st.rerun()
+
 
                         except Exception as e:
                             st.error("Erro ao confirmar revisão.")
@@ -1800,14 +1608,22 @@ elif page == "3 — Revisar & Apontamentos":
     if str(status_versao).upper() == "VALIDADA":
         st.success("Versão validada. Pronta para exportação.")
         if st.button("➡️ Ir para Exportar"):
-            goto("4 — Exportar")
+            goto("5 — Exportar")
     else:
         st.info("Resolva os apontamentos e valide a versão para liberar a exportação.")
 
 # ===========================
-# 4 — EXPORTAR
+# 4 — Editor C170
 # ===========================
-elif page == "4 — Exportar":
+elif page == "4 — C170 - Editor":
+
+    render_editor_c170()
+
+
+# ===========================
+# 5 — EXPORTAR
+# ===========================
+elif page == "5 — Exportar":
 
     if st.session_state.get("selected_versao_id") is None:
         st.info("Selecione uma versão primeiro.")

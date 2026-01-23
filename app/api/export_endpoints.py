@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 from app.db.session import get_db
-from app.db.models import EfdVersao
+from app.db.models import EfdVersao, EfdArquivo, Empresa
 from app.services.apontamentos_export_service import ApontamentosExportService
 from app.services.export_service import exportar_sped
 import zipfile
@@ -13,6 +13,8 @@ import uuid
 from pydantic import BaseModel
 from typing import List
 from io import BytesIO
+import logging
+logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("exports")
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -115,6 +117,7 @@ def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception("Erro export versao_id=%s", versao_id)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -123,42 +126,70 @@ class ExportZipPayload(BaseModel):
 
 @router.post("/versoes-zip")
 def exportar_versoes_zip(payload: ExportZipPayload, db: Session = Depends(get_db)):
-    versao_ids = [int(v) for v in payload.versao_ids if v is not None]
+    try:
+        zip_path = _gerar_zip_por_versoes(versao_ids=payload.versao_ids, db=db)
+        return FileResponse(path=str(zip_path), media_type="application/zip", filename="SPED_exports.zip")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/empresa/{empresa_id}/versoes-zip")
+def exportar_versoes_zip_por_empresa_status(
+    empresa_id: int,
+    status: List[str] = ["VALIDADA", "EXPORTADA"],  # ?status=VALIDADA&status=EXPORTADA
+    db: Session = Depends(get_db),
+):
+    status_norm = [str(s).strip().upper() for s in (status or [])]
+    allowed = {"VALIDADA", "EXPORTADA"}
+    status_norm = [s for s in status_norm if s in allowed]
+    if not status_norm:
+        raise HTTPException(status_code=400, detail="Status inválido. Use: VALIDADa / EXPORTADA.")
+
+    # busca IDs das versões pela empresa
+    versao_ids = [
+        int(v_id) for (v_id,) in (
+            db.query(EfdVersao.id)
+            .join(EfdArquivo, EfdArquivo.id == EfdVersao.arquivo_id)
+            .filter(EfdArquivo.empresa_id == int(empresa_id))
+            .filter(EfdVersao.status.in_(status_norm))
+            .order_by(EfdVersao.id.desc())
+            .all()
+        )
+    ]
+
+    if not versao_ids:
+        raise HTTPException(status_code=404, detail="Nenhuma versão encontrada para os status informados.")
+
+    try:
+        zip_path = _gerar_zip_por_versoes(versao_ids=versao_ids, db=db)
+        # nome melhor (inclui status)
+        filename = f"SPED_empresa_{empresa_id}_{'-'.join(status_norm)}.zip"
+        return FileResponse(path=str(zip_path), media_type="application/zip", filename=filename)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _gerar_zip_por_versoes(*, versao_ids: list[int], db: Session) -> Path:
+    versao_ids = [int(v) for v in versao_ids if v is not None]
     if not versao_ids:
         raise HTTPException(status_code=400, detail="Informe versao_ids (lista de int).")
 
     zip_path = EXPORT_DIR / f"SPED_export_{uuid.uuid4().hex}.zip"
 
-    try:
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for vid in versao_ids:
-                # cria um nome de arquivo por versão (evita sobrescrever)
-                out_path = EXPORT_DIR / f"SPED_versao_{vid}.txt"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for vid in versao_ids:
+            out_path = EXPORT_DIR / f"SPED_versao_{vid}.txt"
 
-                caminho = exportar_sped(
-                    versao_id=int(vid),
-                    caminho_saida=str(out_path),
-                    db=db,
-                )
+            caminho = exportar_sped(
+                versao_id=int(vid),
+                caminho_saida=str(out_path),
+                db=db,
+            )
 
-                p = Path(caminho)
-                if not p.exists():
-                    raise HTTPException(status_code=500, detail=f"Falha ao gerar arquivo da versão {vid}")
+            p = Path(caminho)
+            if not p.exists():
+                raise HTTPException(status_code=500, detail=f"Falha ao gerar arquivo da versão {vid}")
 
-                zf.write(str(p), arcname=p.name)
+            zf.write(str(p), arcname=p.name)
 
-        return FileResponse(
-            path=str(zip_path),
-            media_type="application/zip",
-            filename="SPED_exports.zip",
-        )
-
-    except ValueError as e:
-        # exportar_sped lança ValueError quando status não permite, etc.
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    return zip_path

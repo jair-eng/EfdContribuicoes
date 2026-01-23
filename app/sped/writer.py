@@ -3,7 +3,7 @@ from typing import Optional
 from app.sped.bloco9 import calcular_bloco9
 from app.sped.formatter import formatar_linha
 
-BLOCO9_REGS = {"9900", "9990", "9999"}
+BLOCO9_REGS = {"9001", "9900", "9990", "9999"}
 
 def gerar_sped(registros, destino_arquivo: str, *, newline: Optional[str] = None) -> None:
     """
@@ -19,40 +19,63 @@ def gerar_sped(registros, destino_arquivo: str, *, newline: Optional[str] = None
       - "\\n" -> LF
       - "\\r\\n" -> CRLF
     """
+
+
     nl = newline if newline in ("\n", "\r\n") else "\n"
 
+
+
     # 1) Base sem Bloco 9 (evita duplicação)
-    base = [r for r in registros if str(getattr(r, "reg", "")).strip() not in BLOCO9_REGS]
+    def _reg_of(item) -> str:
+        if isinstance(item, str):
+            parts = item.split("|")
+            return parts[1].strip() if len(parts) > 2 else ""
+        return str(getattr(item, "reg", "") or "").strip()
+
+    base = [r for r in registros if _reg_of(r) not in BLOCO9_REGS]
 
     # 2) Formata linhas base
     linhas: list[str] = []
     for r in base:
-        conteudo = getattr(r, "conteudo_json", None) or {}
-        campos = conteudo.get("dados", []) or []
-        linha = formatar_linha(str(r.reg), campos)
+        # INSERT_* pode inserir linha crua (str)
+        if isinstance(r, str):
+            linha = r
+        else:
+            conteudo = getattr(r, "conteudo_json", None) or {}
 
-        # segurança: garante pipe final
+            # revisão REPLACE_LINE tem prioridade
+            raw = conteudo.get("raw")
+            if raw:
+                linha = str(raw)
+            else:
+                campos = conteudo.get("dados", []) or []
+                linha = formatar_linha(str(r.reg), campos)
+
+        # normaliza e garante pipe final
+        linha = (linha or "").rstrip("\r\n")
         if not linha.endswith("|"):
             linha += "|"
 
         linhas.append(linha)
 
-    # 3) Recalcula Bloco 9 a partir da BASE (não do original com 9900/9990/9999)
+    # 3) Recalcula Bloco 9 a partir da BASE
     bloco9 = calcular_bloco9(base)
 
-    # segurança: garante pipe final também no bloco9
     bloco9_ok = []
     for linha in bloco9:
+        linha = (linha or "").rstrip("\r\n")
         if not linha.endswith("|"):
             linha += "|"
         bloco9_ok.append(linha)
 
     linhas.extend(bloco9_ok)
 
-    # 4) Escreve truncando, sem tradução automática de newline
-    # Sugestão: usar errors="strict" para detectar problemas cedo.
-    # Se você preferir tolerância máxima, use "replace" (mas eu evitaria "ignore").
-    with open(destino_arquivo, "w", encoding="latin-1", errors="strict", newline="") as f:
+    # 4) Escrita FINAL — UTF-8 explícito
+    # errors="strict" é bom: se quebrar, revela bug real cedo
+
+    with open(destino_arquivo, "w", encoding="utf-8", errors="strict", newline="") as f:
         for linha in linhas:
-            f.write(linha + nl)
+            f.write(linha)
+            f.write(nl)
+
 

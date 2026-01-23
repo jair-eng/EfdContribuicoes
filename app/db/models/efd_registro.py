@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, BigInteger, ForeignKey, Boolean, CHAR, S
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import relationship
 from app.db.models.base import Base
+from sqlalchemy.orm import synonym
 
 class EfdRegistro(Base):
     __tablename__ = "efd_registro"
@@ -10,6 +11,7 @@ class EfdRegistro(Base):
     versao_id = Column(Integer, ForeignKey("efd_versao.id"), nullable=False)
 
     linha = Column(Integer, nullable=False)
+    linha_num = synonym("linha")
     reg = Column(CHAR(4), nullable=False)
     conteudo_json = Column(JSON, nullable=False)
 

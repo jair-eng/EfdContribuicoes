@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import hashlib
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional , Tuple
 
@@ -7,6 +7,8 @@ from typing import Any, Dict, Iterator, List, Optional , Tuple
 # -----------------------------
 # Utilitários gerais
 # -----------------------------
+def _hash_linha_sped(s: str) -> str:
+    return hashlib.sha1(s.encode("latin-1", errors="ignore")).hexdigest()
 
 def detectar_line_ending(file_path: str, *, max_bytes: int = 65536) -> str:
     with open(file_path, "rb") as f:
@@ -269,10 +271,13 @@ def parse_sped_full(file_path: str) -> Iterator[Dict[str, Any]]:
             dados = partes[2:-1]
 
             yield {
-                "linha": idx,
+                "linha": idx,  # compat
+                "linha_num": idx,                     # ✅ oficial
+                "linha_hash": _hash_linha_sped(line), # ✅ auditoria
                 "registro": reg,
                 "conteudo_json": {"dados": dados},
             }
+
 
 
 # -----------------------------

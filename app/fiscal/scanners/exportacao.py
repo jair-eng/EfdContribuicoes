@@ -297,3 +297,109 @@ def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[Registro
         linha=int(anchor.linha or 1),
         dados=[{"_meta": flags}],
     )
+
+def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+    regs_presentes = {(r.reg or "").strip() for r in registros_db}
+    flags = {
+        "tem_1200": "1200" in regs_presentes,
+        "tem_1210": "1210" in regs_presentes,
+        "tem_1700": "1700" in regs_presentes,
+    }
+    flags.update(coletar_flags_bloco_m(registros_db))
+
+    c190s = [r for r in registros_db if (r.reg or "").strip() == "C190"]
+    if not c190s:
+        return None
+
+    itens: List[Dict[str, Any]] = []
+    anchor = None
+
+    for r in c190s:
+        dados = (r.conteudo_json or {}).get("dados") or []
+        if len(dados) < 4:
+            continue
+
+        cfop = str(dados[1] or "").strip()
+
+        # entradas: CFOP 1xxx/2xxx (compras)
+        if not (cfop.startswith("1") or cfop.startswith("2")):
+            continue
+
+        if anchor is None or int(r.id) < int(anchor.id):
+            anchor = r
+
+        itens.append({
+            "cst_icms": str(dados[0] or "").strip(),
+            "cfop": cfop,
+            "vl_opr": dados[3],  # string br -> regra converte
+        })
+
+    if not itens or anchor is None:
+        return None
+
+    flags.update(coletar_creditos_bloco_m(registros_db))
+    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+    flags["perfil_monofasico"] = perfil_monofasico
+    flags["score_monofasico"] = score_monofasico
+    flags["fonte"] = "C190"
+
+    dados_final: List[Any] = [{"_meta": flags}] + itens
+
+    return RegistroFiscalDTO(
+        id=int(anchor.id),
+        reg="C190_IND_TORRADO_AGG",
+        linha=int(anchor.linha),
+        dados=dados_final,
+    )
+def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+    regs_presentes = {(r.reg or "").strip() for r in registros_db}
+    flags = {
+        "tem_1200": "1200" in regs_presentes,
+        "tem_1210": "1210" in regs_presentes,
+        "tem_1700": "1700" in regs_presentes,
+    }
+    flags.update(coletar_flags_bloco_m(registros_db))
+
+    c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+    if not c170s:
+        return None
+
+    itens: List[Dict[str, Any]] = []
+    anchor: Optional[EfdRegistro] = None
+
+    for r in c170s:
+        dados = (r.conteudo_json or {}).get("dados") or []
+        if len(dados) < 10:
+            continue
+
+        cfop = str(dados[9] or "").strip()
+        if not (len(cfop) == 4 and cfop.isdigit() and (cfop.startswith("1") or cfop.startswith("2"))):
+            continue
+
+        vl_item = dados[5] if len(dados) > 5 else "0"
+
+        if anchor is None or int(r.id) < int(anchor.id):
+            anchor = r
+
+        itens.append({
+            "cfop": cfop,
+            "vl_opr": vl_item,
+        })
+
+    if not itens or anchor is None:
+        return None
+
+    flags.update(coletar_creditos_bloco_m(registros_db))
+    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+    flags["perfil_monofasico"] = perfil_monofasico
+    flags["score_monofasico"] = score_monofasico
+    flags["fonte"] = "C170"
+
+    dados_final: List[Any] = [{"_meta": flags}] + itens
+
+    return RegistroFiscalDTO(
+        id=int(anchor.id),
+        reg="C170_IND_TORRADO_AGG",
+        linha=int(anchor.linha),
+        dados=dados_final,
+    )

@@ -15,7 +15,9 @@ from inspect import signature
 from app.fiscal.regras.achado import Achado
 from app.fiscal.regras.regra_posto_monofasico_credito_acumulado_v1 import RegraPostoMonofasicoCreditoAcumuladoV1
 from app.fiscal.regras.regra_exp_m_zerado_v1 import RegraExportacaoBlocoMZeradoV1
-from app.fiscal.regras.base_regras import aplicar_supressao_por_erros_dict, aplicar_bloqueio_por_grupo_dict
+from app.fiscal.regras.base_regras import aplicar_supressao_por_erros_dict, aplicar_bloqueio_por_grupo_dict, \
+    aplicar_rebaixamento_por_presenca_dict
+from app.fiscal.regras.regra_industrializacao_torrado_v1 import RegraIndustrializacaoTorradoV1
 
 print("ACHADO_CLASS =", Achado)
 print("ACHADO_MODULE =", Achado.__module__)
@@ -31,6 +33,7 @@ REGRAS_ATIVAS = [
     RegraExportacaoRessarcimentoV1(),
     RegraPostoMonofasicoCreditoAcumuladoV1(),
     RegraExportacaoBlocoMZeradoV1(),
+    RegraIndustrializacaoTorradoV1(),
 
 ]
 
@@ -60,12 +63,21 @@ def _safe_float(v: Any) -> Optional[float]:
         return float(v)
     if isinstance(v, Decimal):
         return float(v)
-    # aceita string "123,45" também
-    s = str(v).strip().replace(".", "").replace(",", ".")
+
+    s = str(v).strip()
+    if not s:
+        return None
+
+    # Se tiver vírgula, assume pt-BR: "1.234,56"
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    # Senão, assume padrão: "1234.56" (não remove ponto)
+
     try:
         return float(s)
     except Exception:
         return None
+
 
 def _norm_codigo(c: Any) -> Optional[str]:
     if c is None:
@@ -136,11 +148,19 @@ def executar_varredura(
     # ✅ pós-processamento 1 (bloqueio/supressão pontual por código)
     achados_raw = aplicar_supressao_por_erros_dict(achados_raw)
 
+    # ✅ pós-processamento 1.1 (rebaixamento por presença — evita poluição)
+    achados_raw = aplicar_rebaixamento_por_presenca_dict(
+        achados_raw,
+        se_existe="CAFE_C190_V1",
+        rebaixar=["IND_TORRADO_V1"],
+        prioridade_alvo="BAIXA",
+    )
+
     # ✅ pós-processamento 2 (agrupamento + erro crítico bloqueia/rebaixa oportunidades do grupo)
     achados_raw = aplicar_bloqueio_por_grupo_dict(
         achados_raw,
-        erros_criticos=("EXP_M_ZERADO_V1",),  # você pode adicionar outros depois
-        rebaixar_prioridade=True,  # se quiser só bloquear sem rebaixar, coloque False
+        erros_criticos=("EXP_M_ZERADO_V1",),
+        rebaixar_prioridade=True,
     )
 
     # ✅ agora converte para DTO

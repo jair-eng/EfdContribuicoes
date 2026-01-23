@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Set, Tuple
+from typing import Optional, List, Dict, Set, Tuple, Any
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
 from .achado import Achado
-from app.fiscal.constants import GRUPO_EXPORTACAO
-from dataclasses import replace
+
 
 class RegraBase(ABC):
     codigo: str
@@ -30,6 +29,34 @@ class RegraBase(ABC):
             return Decimal(s)
         except Exception:
             return None
+
+    @staticmethod
+    def to_bool(v) -> bool:
+        """
+        Converte valores “soltos” (bool/int/str) para booleano real.
+
+        Regras:
+          - None / "" -> False
+          - bool -> o próprio
+          - int/float -> != 0
+          - str: aceita variações pt/en:
+              True:  "1","true","t","yes","y","sim","s","on"
+              False: "0","false","f","no","n","nao","não","off",""
+          - Qualquer outra coisa -> False (fail-safe)
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return v != 0
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("1", "true", "t", "yes", "y", "sim", "s", "on"):
+                return True
+            if s in ("0", "false", "f", "no", "n", "nao", "não", "off", ""):
+                return False
+        return False
 
     @staticmethod
     def money(d: Decimal | None) -> float | None:
@@ -153,6 +180,30 @@ PRIORIDADE_ORDEM = {"ALTA": 3, "MEDIA": 2, "BAIXA": 1, None: 0}
 def _rebaixar_para_baixa(prio: Optional[str]) -> str:
     # sempre devolve string
     return "BAIXA"
+
+def aplicar_rebaixamento_por_presenca_dict(
+    achados: List[Dict[str, Any]],
+    *,
+    se_existe: str,
+    rebaixar: List[str],
+    prioridade_alvo: str = "BAIXA",
+) -> List[Dict[str, Any]]:
+    presentes = {str(a.get("codigo") or "").strip() for a in achados}
+    if se_existe not in presentes:
+        return achados
+
+    rebaixar_set = set(rebaixar)
+
+    for a in achados:
+        codigo = str(a.get("codigo") or "").strip()
+        if codigo in rebaixar_set:
+            a["prioridade"] = prioridade_alvo
+            meta = a.get("meta") or {}
+            if isinstance(meta, dict):
+                meta["rebaixado_por"] = se_existe
+                a["meta"] = meta
+
+    return achados
 
 def _mapa_grupo_por_codigo(codigo: str) -> Optional[str]:
     """

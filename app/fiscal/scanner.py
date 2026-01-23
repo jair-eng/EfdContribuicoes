@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from app.db.models import EfdRegistro, EfdApontamento
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.scanners.c190 import montar_c190_agg
-from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_export_agg
+from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_export_agg, montar_c190_ind_torrado_agg, \
+    montar_c170_ind_torrado_agg
 from app.fiscal.varredura import executar_varredura
 from app.fiscal.regras.achado import Achado
 from app.fiscal.scanners.exportacao import montar_meta_fiscal
@@ -30,6 +31,8 @@ class FiscalScanner:
             .order_by(EfdRegistro.linha.asc())
             .all()
         )
+
+
 
         # 2) Converter para DTO
         dtos: List[RegistroFiscalDTO] = []
@@ -58,6 +61,13 @@ class FiscalScanner:
             c170_exp = montar_c170_export_agg(rows)
             if c170_exp:
                 dtos.append(c170_exp)
+        c190_ind = montar_c190_ind_torrado_agg(rows)
+        if c190_ind:
+            dtos.append(c190_ind)
+        else:
+            c170_ind = montar_c170_ind_torrado_agg(rows)
+            if c170_ind:
+                dtos.append(c170_ind)
 
         # 2.5) Injetar DTO agregador (C190_AGG)
         c190_agg = montar_c190_agg(rows)

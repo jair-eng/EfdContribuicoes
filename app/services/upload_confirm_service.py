@@ -169,11 +169,15 @@ class UploadConfirmService:
             total = 0
 
             for r in parse_sped_full(str(file_path)):
+                linha_num = r.get("linha") or r.get("linha_num")
+                if linha_num is None:
+                    raise KeyError("linha")
+
                 buffer.append(
                     EfdRegistro(
                         versao_id=int(versao.id),
                         reg=r["registro"],
-                        linha=r["linha"],
+                        linha=int(linha_num),  # <-- usa o campo atual
                         conteudo_json=r["conteudo_json"],
                     )
                 )
@@ -187,7 +191,9 @@ class UploadConfirmService:
                 db.bulk_save_objects(buffer)
                 total += len(buffer)
 
+
             return {
+                "temp_id": temp_id,
                 "empresa_id": int(empresa.id),
                 "arquivo_id": int(arquivo.id),
                 "versao_id": int(versao.id),
@@ -197,6 +203,8 @@ class UploadConfirmService:
                 "cnpj": cnpj_limpo,
             }
 
-        finally:
-            file_path.unlink(missing_ok=True)
+        except Exception:
 
+            # mantém o temp para retry/debug
+            # (se quiser, pode apagar só em erros específicos)
+            raise

@@ -90,8 +90,12 @@ class UploadPreviewService:
                 "line_ending": line_ending,
             }
 
+
         except Exception:
+
             traceback.print_exc()
-            temp_path.unlink(missing_ok=True)
+
+            # NÃO apaga o temp aqui
+
             raise
-        # ✅ Não feche upload_file.file aqui: o FastAPI gerencia o ciclo de vida.
+

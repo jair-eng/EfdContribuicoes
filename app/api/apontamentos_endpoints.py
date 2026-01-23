@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.db.models.efd_revisao import EfdRevisao
 from app.fiscal.scanner import FiscalScanner
 from typing import Optional, Literal, List, Dict, Any , Set
 from fastapi import APIRouter, Depends, HTTPException, Query, status , Body
@@ -7,11 +9,13 @@ from app.db.models import EfdVersao
 from app.db.models import EfdApontamento, EfdRegistro
 from sqlalchemy.orm import Session
 from app.api.payloads import ReprocessarSelecaoPayload
-from sqlalchemy import update, or_ , delete, case , Integer, select, func
+from sqlalchemy import update, or_ , delete, case , Integer, select, func, exists
 from pydantic import BaseModel, Field
-from sqlalchemy.sql import func
 
 
+from app.schemas.workflow import AplicarRevisaoPayload, ApontamentosBatchPayload
+from app.services.apontamento_service import ApontamentoService
+from app.services.revision_service import RevisionService
 
 router = APIRouter(prefix="/workflow", tags=["Apontamentos"])
 
@@ -157,7 +161,7 @@ def debug_apontamentos(versao_id: int, db: Session = Depends(get_db)):
 
     return [{"id": r[0], "tipo": r[1], "resolvido": bool(r[2])} for r in rows]
 
-@router.post("/workflow/versao/{versao_id}/reprocessar_selecao")
+@router.post("/versao/{versao_id}/reprocessar_selecao")
 def reprocessar_selecao(
     versao_id: int,
     payload: ReprocessarSelecaoPayload,
@@ -233,8 +237,41 @@ def listar_apontamentos(
     Retorna também dados do registro associado (linha/reg).
     """
     try:
+        tem_revisao_sq = exists().where(
+            (EfdRevisao.versao_origem_id == versao_id) &
+            (EfdRevisao.registro_id == EfdApontamento.registro_id)
+        )
+
+        last_revisao_id_sq = (
+            select(EfdRevisao.id)
+            .where(
+                (EfdRevisao.versao_origem_id == versao_id) &
+                (EfdRevisao.registro_id == EfdApontamento.registro_id)
+            )
+            .order_by(EfdRevisao.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        last_versao_revisada_id_sq = (
+            select(EfdRevisao.versao_revisada_id)
+            .where(
+                (EfdRevisao.versao_origem_id == versao_id) &
+                (EfdRevisao.registro_id == EfdApontamento.registro_id)
+            )
+            .order_by(EfdRevisao.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
         q = (
-            db.query(EfdApontamento, EfdRegistro)
+            db.query(
+                EfdApontamento,
+                EfdRegistro,
+                tem_revisao_sq.label("tem_revisao"),
+                last_revisao_id_sq.label("revisao_id"),
+                last_versao_revisada_id_sq.label("versao_revisada_id"),
+            )
             .outerjoin(EfdRegistro, EfdRegistro.id == EfdApontamento.registro_id)
             .filter(EfdApontamento.versao_id == versao_id)
         )
@@ -308,7 +345,7 @@ def listar_apontamentos(
         )
 
         itens: List[Dict[str, Any]] = []
-        for a, r in rows:
+        for a, r, tem_revisao, revisao_id, versao_revisada_id in rows:
             itens.append(
                 {
                     "id": int(a.id),
@@ -330,6 +367,9 @@ def listar_apontamentos(
                         if r is not None
                         else None
                     ),
+                    "tem_revisao": bool(tem_revisao),
+                    "revisao_id": int(revisao_id) if revisao_id is not None else None,
+                    "versao_revisada_id": int(versao_revisada_id) if versao_revisada_id is not None else None,
                 }
             )
 
@@ -346,10 +386,6 @@ def listar_apontamentos(
 
         raise HTTPException(status_code=500, detail=f"Erro interno ao listar apontamentos: {e}")
 
-class ApontamentosBatchPayload(BaseModel):
-    versao_id: int
-    to_resolver: List[int] = Field(default_factory=list)
-    to_reabrir: List[int] = Field(default_factory=list)
 
 
 @router.patch(
@@ -357,35 +393,34 @@ class ApontamentosBatchPayload(BaseModel):
     status_code=status.HTTP_200_OK,
 )
 def resolver_apontamento(
-        apontamento_id: int,
-        db: Session = Depends(get_db),
+    apontamento_id: int,
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Marca um apontamento como resolvido.
     """
-    try:
-        ap = db.query(EfdApontamento).filter(EfdApontamento.id == apontamento_id).first()
-        if not ap:
-            raise HTTPException(status_code=404, detail="Apontamento não encontrado")
+    ap = (
+        db.query(EfdApontamento)
+        .filter(EfdApontamento.id == apontamento_id)
+        .first()
+    )
 
+    if not ap:
+        raise HTTPException(status_code=404, detail="Apontamento não encontrado")
+
+    # o context manager cuida de commit/rollback
+    with db.begin():
         ap.resolvido = True
         db.add(ap)
-        db.commit()
+        db.flush()
 
-        return {
-            "id": int(ap.id),
-            "versao_id": int(ap.versao_id),
-            "resolvido": True,
-            "status": "Resolvido",
-        }
+    return {
+        "id": int(ap.id),
+        "versao_id": int(ap.versao_id),
+        "resolvido": True,
+        "status": "Resolvido",
+    }
 
-
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.patch(
@@ -500,3 +535,55 @@ def aplicar_apontamentos_em_lote(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
+
+
+
+@router.post("/versao/{versao_id}/aplicar-revisao",
+    status_code=status.HTTP_201_CREATED,
+)
+def aplicar_revisao_apontamento(
+    apontamento_id: int,
+    payload: AplicarRevisaoPayload,
+    db: Session = Depends(get_db),
+):
+    """
+    Cria uma revisão (REPLACE_LINE) ligada a um apontamento.
+    - cria (ou reutiliza) a versão revisada automaticamente
+    - não altera a versão original
+    """
+    try:
+        rev = RevisionService.criar_revisao_replace_line(
+            db,
+            apontamento_id=int(apontamento_id),
+            linha_nova=str(payload.linha_nova),
+            motivo_codigo=payload.motivo_codigo,
+        )
+        db.commit()
+        return {
+            "revisao_id": int(rev.id),
+            "versao_origem_id": int(rev.versao_origem_id),
+            "versao_revisada_id": int(rev.versao_revisada_id),
+            "registro_id": int(rev.registro_id),
+            "acao": str(rev.acao),
+            "linha_num": rev.revisao_json.get("linha_num"),
+            "motivo_codigo": rev.motivo_codigo,
+        }
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/versao/{versao_id}/resolver_todos", status_code=200)
+def resolver_todos_pendentes(versao_id: int, db: Session = Depends(get_db)):
+
+    with db.begin():
+        r = ApontamentoService.resolver_todos_pendentes_por_versao(db, versao_id=int(versao_id))
+
+    return {
+        "versao_id": r.versao_id,
+        "updated_total": r.updated_total,
+        "pendentes_restantes": r.pendentes_restantes,
+        "status": "OK",
+    }

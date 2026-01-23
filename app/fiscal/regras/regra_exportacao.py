@@ -4,7 +4,9 @@ from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.achado import Achado, Prioridade
 from app.fiscal.regras.base_regras import RegraBase
 import logging
+from app.schemas.workflow import RevisaoFiscal
 from collections import defaultdict
+from app.sped.renderer import  _sha1
 from app.config.settings import (
     ALIQUOTA_PIS,
     ALIQUOTA_COFINS,
@@ -16,9 +18,39 @@ from app.fiscal.constants import (
     SUBGRUPO_CONSISTENCIA,
 )
 
-
-
 logger = logging.getLogger(__name__)
+
+
+
+def _deve_aplicar(ctx) -> bool:
+    credito = ctx.get("credito_total")
+    tem_export = bool(ctx.get("tem_exportacao"))
+    try:
+        if credito is None:
+            return tem_export
+        if not isinstance(credito, Decimal):
+            s = str(credito or "0").strip()
+            s = s.replace(".", "").replace(",", ".") if "," in s else s
+            credito = Decimal(s)
+        return credito > 0 or tem_export
+    except Exception:
+        return tem_export
+
+
+def _find_line_num(linhas: list[str], prefix: str) -> int | None:
+    # retorna linha_num 1-based
+    for i, l in enumerate(linhas, start=1):
+        if l.startswith(prefix):
+            return i
+    return None
+
+def _fmt_m100(credito: str) -> str:
+    # Mantemos apenas campos essenciais (exemplo alinhado ao seu caso)
+    # Ajuste se você já tem um formatter central
+    return f"|M100|01|0,00|0,00|0,00|0,00|{credito}|0,00|0,00|0,00|{credito}|"
+
+def _fmt_m200(credito: str) -> str:
+    return f"|M200|{credito}|0,00|0,00|0,00|"
 
 
 class RegraExportacaoRessarcimentoV1(RegraBase):
@@ -343,3 +375,88 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
         except Exception:
             logger.exception("Erro na regra EXP_RESSARC_V1")
             return None
+
+    def gerar_revisoes(self, ctx) -> list[RevisaoFiscal]:
+        if not _deve_aplicar(ctx):
+            return []
+
+        linhas_sped: list[str] = ctx["linhas_sped"]
+
+        credito = ctx.get("credito_total")
+        if not isinstance(credito, Decimal):
+            return []
+
+        credito_fmt = f"{credito:.2f}".replace(".", ",")
+
+        revisoes: list[RevisaoFiscal] = []
+
+        # 1) Localiza âncoras (linha_num 1-based)
+        linha_m001 = _find_line_num(linhas_sped, "|M001|")
+        linha_m100 = _find_line_num(linhas_sped, "|M100|")
+        linha_m200 = _find_line_num(linhas_sped, "|M200|")
+
+        if linha_m001 is None:
+            return []
+
+        # 2) Conteúdos novos
+        conteudo_m100 = (
+            f"|M100|01|0,00|0,00|0,00|0,00|"
+            f"{credito_fmt}|0,00|0,00|0,00|{credito_fmt}|"
+        )
+        conteudo_m200 = f"|M200|{credito_fmt}|0,00|0,00|0,00|"
+
+        # -------------------------
+        # M100
+        # -------------------------
+        if linha_m100 is not None:
+            linha_antes_m100 = linhas_sped[linha_m100 - 1].strip()
+            revisoes.append(RevisaoFiscal(
+                operacao="REPLACE_LINE",
+                linha_referencia=linha_m100,
+                linha_antes=linha_antes_m100,
+                linha_hash=_sha1(linha_antes_m100),
+                conteudo=conteudo_m100,
+                regra_codigo="EXP_RESSARC_V1",
+                registro="M100",
+            ))
+            m100_sera_inserido = False
+        else:
+            revisoes.append(RevisaoFiscal(
+                operacao="INSERT_AFTER",
+                linha_referencia=linha_m001,
+                conteudo=conteudo_m100,
+                regra_codigo="EXP_RESSARC_V1",
+                registro="M100",
+            ))
+            m100_sera_inserido = True
+
+        # -------------------------
+        # M200
+        # -------------------------
+        if linha_m200 is not None:
+            linha_antes_m200 = linhas_sped[linha_m200 - 1].strip()
+            revisoes.append(RevisaoFiscal(
+                operacao="REPLACE_LINE",
+                linha_referencia=linha_m200,
+                linha_antes=linha_antes_m200,
+                linha_hash=_sha1(linha_antes_m200),
+                conteudo=conteudo_m200,
+                regra_codigo="EXP_RESSARC_V1",
+                registro="M200",
+            ))
+        else:
+            # Se M100 será inserido logo após M001, então M200 deve ser inserido após M100.
+            # Como nosso motor só tem INSERT_AFTER por linha_num, usamos:
+            #   - inserir M100 em M001+1
+            #   - inserir M200 em (M001+1)+1 => INSERT_AFTER linha_m001+1
+            linha_ref_para_m200 = (linha_m001 + 1) if m100_sera_inserido else linha_m001
+
+            revisoes.append(RevisaoFiscal(
+                operacao="INSERT_AFTER",
+                linha_referencia=linha_ref_para_m200,
+                conteudo=conteudo_m200,
+                regra_codigo="EXP_RESSARC_V1",
+                registro="M200",
+            ))
+
+        return revisoes

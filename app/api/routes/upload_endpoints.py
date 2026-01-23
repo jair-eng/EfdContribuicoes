@@ -13,6 +13,7 @@ from app.services.upload_preview_service import UploadPreviewService
 
 
 
+
 router = APIRouter(prefix="/sped", tags=["SPED Upload"])
 
 class UploadPreviewResponse(BaseModel):
@@ -130,27 +131,42 @@ def upload_confirm_batch(payloads: List[UploadConfirmPayload], db: Session = Dep
     results = []
     errors = []
 
-    for p in payloads:
+    # Transação externa do lote (o contexto faz commit/rollback)
+    with db.begin():
+        for p in payloads:
+            try:
+                # SAVEPOINT por arquivo
+                with db.begin_nested():
+                    res = UploadConfirmService.confirmar_upload(
+                        db,
+                        temp_id=p.temp_id,
+                        nome_arquivo=p.nome_arquivo,
+
+                    )
+                results.append(res)
+
+            except Exception as e:
+                # NÃO rollback aqui (o begin_nested já reverteu o savepoint)
+                errors.append({"temp_id": p.temp_id, "error": str(e)})
+
+    from pathlib import Path
+
+    TEMP_DIR = Path("...")  # seu TEMP_DIR real
+
+    # depois do commit (fora do with db.begin())
+    for item in results:
         try:
-            # ✅ SAVEPOINT por arquivo (isolamento real sem conflito)
-            with db.begin_nested():
-                res = UploadConfirmService.confirmar_upload(
-                    db,
-                    temp_id=p.temp_id,
-                    nome_arquivo=p.nome_arquivo,
-                )
-            results.append(res)
-
-        except Exception as e:
-            # garante que o savepoint foi revertido
-            db.rollback()
-            errors.append({"temp_id": p.temp_id, "error": str(e)})
-
-    # ✅ commit final do lote (salva todos os que passaram)
-    db.commit()
+            temp_id = item.get("temp_id")
+            if temp_id:
+                (TEMP_DIR / f"{temp_id}.sped").unlink(missing_ok=True)
+        except Exception:
+            pass  # cleanup best-effort
 
     if not results and errors:
-        raise HTTPException(status_code=400, detail={"message": "Nenhum arquivo foi confirmado", "errors": errors})
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Nenhum arquivo foi confirmado", "errors": errors},
+        )
 
     return {
         "items": results,
