@@ -3,6 +3,8 @@ from typing import Optional, List, Dict, Set, Tuple, Any
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
 from .achado import Achado
+import logging
+logger = logging.getLogger(__name__)
 
 
 class RegraBase(ABC):
@@ -27,7 +29,8 @@ class RegraBase(ABC):
         s = s.replace(".", "").replace(",", ".")
         try:
             return Decimal(s)
-        except Exception:
+        except Exception as e:
+            # logger.warning(f"Falha ao converter valor '{v}' para Decimal: {e}")
             return None
 
     @staticmethod

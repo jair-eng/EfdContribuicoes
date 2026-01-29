@@ -1,17 +1,14 @@
 from typing import Iterable
 
 def formatar_linha(registro: str, campos: Iterable[str]) -> str:
-    """
-    Gera uma linha SPED no formato oficial:
-    |REG|campo1|campo2|...|
+    reg = str(registro or "").strip()
+    # Limpa espaços extras que podem deslocar campos
+    campos_str = ["" if c is None else str(c).strip() for c in campos]
 
-    - Não remove campos
-    - Não altera valores
-    - Mantém exatamente a ordem recebida
-    """
+    # Trava de segurança: não duplica o nome do registro se ele já estiver na lista
+    if campos_str and campos_str[0] == reg:
+        corpo = campos_str
+    else:
+        corpo = [reg] + campos_str
 
-    # Segurança mínima: evitar None quebrando join
-    reg = (registro or "").strip()
-    campos_str = ["" if c is None else str(c) for c in campos]
-
-    return "|" + "|".join([reg] + campos_str) + "|"
+    return "|" + "|".join(corpo) + "|"

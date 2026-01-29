@@ -1,6 +1,7 @@
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
 from app.fiscal.regras.regra_m100_credito_pis import RegraM100CreditoPIS
+from app.sped.logic.consolidador import _to_decimal
 
 class RegraM200CreditoCOFINS(RegraM100CreditoPIS):
 
@@ -10,9 +11,9 @@ class RegraM200CreditoCOFINS(RegraM100CreditoPIS):
 
         dados = registro.dados or []
 
-        base = self._to_decimal(dados[2]) if len(dados) > 2 else None
-        aliquota = self._to_decimal(dados[3]) if len(dados) > 3 else None
-        credito = self._to_decimal(dados[4]) if len(dados) > 4 else None
+        base = _to_decimal(dados[2]) if len(dados) > 2 else None
+        aliquota = _to_decimal(dados[3]) if len(dados) > 3 else None
+        credito = _to_decimal(dados[4]) if len(dados) > 4 else None
 
         if base is None or aliquota is None:
             return None

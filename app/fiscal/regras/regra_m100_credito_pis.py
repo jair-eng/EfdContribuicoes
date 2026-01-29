@@ -1,19 +1,13 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, Any, List
 from app.fiscal.dto import RegistroFiscalDTO
+from app.sped.logic.consolidador import _to_decimal
 
 class RegraM100CreditoPIS:
     codigo_base = "M100"
     tipo = "M100"
 
-    def _to_decimal(self, s):
-        if not s:
-            return None
-        txt = str(s).replace(".", "").replace(",", ".")
-        try:
-            return Decimal(txt)
-        except:
-            return None
+
 
     def aplicar(self, registro: RegistroFiscalDTO):
         if registro.reg != "M100":
@@ -21,9 +15,9 @@ class RegraM100CreditoPIS:
 
         dados: List[Any] = registro.dados or []
 
-        base = self._to_decimal(dados[2]) if len(dados) > 2 else None
-        aliquota = self._to_decimal(dados[3]) if len(dados) > 3 else None
-        credito = self._to_decimal(dados[4]) if len(dados) > 4 else None
+        base = _to_decimal(dados[2]) if len(dados) > 2 else None
+        aliquota = _to_decimal(dados[3]) if len(dados) > 3 else None
+        credito = _to_decimal(dados[4]) if len(dados) > 4 else None
 
         if base is None or aliquota is None:
             return None

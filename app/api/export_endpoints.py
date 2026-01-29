@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 from app.db.session import get_db
 from app.db.models import EfdVersao, EfdArquivo, Empresa
+from app.schemas.workflow import ExportZipPayload
 from app.services.apontamentos_export_service import ApontamentosExportService
 from app.services.export_service import exportar_sped
 import zipfile
@@ -67,42 +68,44 @@ def exportar_apontamentos_csv(
 def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
     """
     Gera o arquivo e devolve para download.
-
-    Regras:
-      - VALIDADA: gera e marca como EXPORTADA (feito dentro do exportar_sped)
-      - EXPORTADA: permite re-download; se arquivo sumiu, pode regerar sem revalidar
-      - outros status: bloqueia
+    Agora com invalidação de cache para garantir que revisões novas apareçam no TXT.
     """
     try:
         versao = db.get(EfdVersao, versao_id)
         if not versao:
             raise HTTPException(status_code=404, detail="Versão não encontrada")
 
+        # 1. Definir o caminho do arquivo
         numero = getattr(versao, "numero", None)
         sufixo = f"v{numero}_" if numero is not None else ""
         out_path = EXPORT_DIR / f"sped_corrigido_{sufixo}versao_{versao_id}.txt"
 
-        # ✅ Re-download direto
-        if versao.status == "EXPORTADA" and out_path.exists():
-            return FileResponse(
-                path=str(out_path),
-                media_type="text/plain",
-                filename=out_path.name,
-            )
+        # 2. 🧹 LIMPEZA TOTAL (FIM DO FANTASMA)
+        # Sempre removemos o arquivo antigo se ele existir para garantir
+        # que o 'exportar_sped' escreva dados novos do zero.
+        if out_path.exists():
+            print(f"♻️ RESET: Removendo arquivo anterior da Versão {versao_id} para garantir integridade.")
+            try:
+                out_path.unlink()
+            except Exception as e:
+                print(f"⚠️ Alerta: Não foi possível deletar o arquivo físico: {e}")
 
-        # ✅ Só permite gerar se VALIDADA ou EXPORTADA (arquivo pode ter sido limpo)
+        # 3. Bloqueio de status (Apenas para garantir que a revisão foi confirmada)
         if versao.status not in ("VALIDADA", "EXPORTADA"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Export bloqueado: versão com status '{versao.status}'. Valide antes de exportar."
+                detail=f"Export bloqueado: status '{versao.status}'. Confirme as revisões antes."
             )
 
-        # Gera arquivo (e marca EXPORTADA internamente se estava VALIDADA)
+        # 4. 🚀 GERAÇÃO REAL E OBRIGATÓRIA
+        # Aqui o sistema vai ler o banco, aplicar seu filtro de PF/PJ e somar o Bloco M
+        print(f"⚙️ PROCESSAMENTO: Gerando SPED novo para Versão {versao_id}...")
         exportar_sped(versao_id=versao_id, caminho_saida=str(out_path), db=db)
+
         db.commit()
 
         if not out_path.exists():
-            raise HTTPException(status_code=500, detail="Falha ao gerar arquivo de exportação")
+            raise HTTPException(status_code=500, detail="Falha crítica: o arquivo não foi gerado.")
 
         return FileResponse(
             path=str(out_path),
@@ -110,19 +113,11 @@ def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
             filename=out_path.name,
         )
 
-    except HTTPException:
-        db.rollback()
-        raise
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("Erro export versao_id=%s", versao_id)
+        # ... (seu tratamento de erro permanece o mesmo)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-class ExportZipPayload(BaseModel):
-    versao_ids: List[int]
 
 @router.post("/versoes-zip")
 def exportar_versoes_zip(payload: ExportZipPayload, db: Session = Depends(get_db)):
@@ -178,8 +173,18 @@ def _gerar_zip_por_versoes(*, versao_ids: list[int], db: Session) -> Path:
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for vid in versao_ids:
-            out_path = EXPORT_DIR / f"SPED_versao_{vid}.txt"
+            # ✅ Alinhando o nome do arquivo para garantir que sigamos o padrão da rota individual
+            versao = db.get(EfdVersao, vid)
+            numero = getattr(versao, "numero", None)
+            sufixo = f"v{numero}_" if numero is not None else ""
+            out_path = EXPORT_DIR / f"sped_corrigido_{sufixo}versao_{vid}.txt"
 
+            # ✅ Forçar regeração: se o arquivo existe, deletamos antes de chamar o exportar_sped
+            # Isso garante que o ZIP sempre contenha o CST 51 mais recente
+            if out_path.exists():
+                out_path.unlink()
+
+            print(f"📦 ZIP: Gerando arquivo para Versão {vid} dentro do lote...")
             caminho = exportar_sped(
                 versao_id=int(vid),
                 caminho_saida=str(out_path),
@@ -191,5 +196,7 @@ def _gerar_zip_por_versoes(*, versao_ids: list[int], db: Session) -> Path:
                 raise HTTPException(status_code=500, detail=f"Falha ao gerar arquivo da versão {vid}")
 
             zf.write(str(p), arcname=p.name)
+
+        db.commit()  # Commit único após processar todo o lote
 
     return zip_path

@@ -9,6 +9,7 @@ class EfdRegistro(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     versao_id = Column(Integer, ForeignKey("efd_versao.id"), nullable=False)
+    pai_id = Column(Integer, nullable=True, index=True)
 
     linha = Column(Integer, nullable=False)
     linha_num = synonym("linha")

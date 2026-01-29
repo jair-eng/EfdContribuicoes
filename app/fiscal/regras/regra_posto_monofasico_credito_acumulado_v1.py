@@ -53,7 +53,8 @@ class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
 
 
             # padrão oficial do projeto
-            if raw and isinstance(raw[0], dict) and "_meta" in raw[0]:
+            meta_flags = {}
+            if isinstance(raw, list) and raw and isinstance(raw[0], dict):
                 meta_flags = raw[0].get("_meta") or {}
 
             perfil_monofasico = to_bool(meta_flags.get("perfil_monofasico"))

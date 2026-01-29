@@ -410,3 +410,24 @@ def _extract_razao_cnpj_from_0140(partes: List[str]) -> Tuple[Optional[str], Opt
         nome = ""
 
     return (nome or None), cnpj
+
+def parse_sped_from_lines(linhas: List[str]) -> List[Dict[str, Any]]:
+    parsed = []
+    for idx, raw in enumerate(linhas, start=1):
+        line = (raw or "").rstrip("\r\n").strip()
+        if not line or not line.startswith("|") or not line.endswith("|"):
+            continue
+        partes = line.split("|")
+        if len(partes) < 3:
+            continue
+        reg = (partes[1] or "").strip()
+        if not reg:
+            continue
+        dados = partes[2:-1]
+        parsed.append({
+            "linha_num": idx,
+            "linha_hash": "",  # opcional: pode deixar vazio se não tiver hash aqui
+            "registro": reg,
+            "conteudo_json": {"dados": dados},
+        })
+    return parsed

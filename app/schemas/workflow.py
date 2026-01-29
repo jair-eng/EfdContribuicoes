@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict
 
 
 
@@ -61,3 +61,14 @@ class RevisaoFiscal(BaseModel):
     linha_hash: Optional[str] = None
 
     regra_codigo: str = Field(..., example="EXP_RESSARC_V1")
+
+# ✅ Esta classe define o formato do JSON que o FastAPI espera receber
+class ExportZipPayload(BaseModel):
+    versao_ids: List[int]
+
+class RevisaoGlobalSchema(BaseModel):
+    versao_origem_id: int
+    motivo_codigo: str
+    filtros_origem: Dict[str, Optional[str]]
+    valores_novos: Dict[str, Optional[str]]
+    apontamento_id: Optional[int] = None

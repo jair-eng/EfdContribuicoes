@@ -9,17 +9,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from ui_utils import goto, cached_empresas, cached_arquivos, cached_versoes, cached_resumo_versao, \
     cached_apontamentos, clear_after_confirm, cached_empresa_resumo, show_error, clear_after_workflow, parse_bool, get, \
-    post, patch, api_url, TIMEOUT
+    post, patch, api_url, TIMEOUT, normalize_apontamento, _safe_int, compute_changes
 from ui_utils import cached_health
 from c170_editor import render_editor_c170
 
-
-import sys, os
-print("CWD:", os.getcwd())
-print("SYSPATH[0]:", sys.path[0])
-print("SYSPATH:", sys.path)
-
-st.set_option("client.showErrorDetails", True)
 
 
 
@@ -836,48 +829,6 @@ elif page == "3 — Revisar & Apontamentos":
             st.stop()
 
 
-        # ---------------------------
-        # Carrega + normaliza apontamentos (fonte da verdade p/ contagem)
-        # ---------------------------
-
-
-
-        def normalize_apontamento(item, idx: int):
-            if isinstance(item, str):
-                return {
-                    "id": f"str_{idx}",
-                    "tipo": "MSG",
-                    "status": "Pendente",
-                    "mensagem": item,
-                    "registro": None,
-                    "linha": None,
-                    "campo": "",
-                    "prioridade": "",
-                    "impacto_financeiro": None,
-                    "resolvido": False,
-                    "_raw": item,
-                }
-
-            if not isinstance(item, dict):
-                return None
-
-            resolvido = parse_bool(item.get("resolvido"))
-            status = "Resolvido" if resolvido else "Pendente"
-            reg = item.get("registro") or {}
-
-            return {
-                "id": item.get("id"),
-                "tipo": item.get("tipo", "—"),
-                "status": status,
-                "mensagem": item.get("descricao") or "",
-                "registro": reg.get("reg"),
-                "linha": reg.get("linha"),
-                "campo": item.get("codigo") or "",
-                "prioridade": item.get("prioridade") or "",
-                "impacto_financeiro": item.get("impacto_financeiro"),
-                "resolvido": resolvido,
-                "_raw": item,
-            }
 
 
         try:
@@ -1034,8 +985,31 @@ elif page == "3 — Revisar & Apontamentos":
 
         if status_versao == "EM_REVISAO" and pendentes_erro == 0:
             if st.button("✅ Confirmar revisão", key="confirmar_revisao"):
-                resp = post(f"/workflow/versao/{versao_id}/confirmar-revisao")
-                data = resp.json() or {}
+                resp = None
+                try:
+                    resp = post(f"/workflow/versao/{versao_id}/confirmar-revisao")
+                except Exception as e:
+                    st.error(f"Erro ao chamar backend: {e}")
+                    st.stop()
+
+                if resp is None:
+                    st.error("Backend não retornou resposta.")
+                    st.stop()
+
+                if resp.status_code != 200:
+                    st.error(f"Erro {resp.status_code}: {resp.text}")
+                    st.stop()
+
+                # protege contra 204 / body vazio
+                if not resp.content:
+                    data = {}
+                else:
+                    try:
+                        data = resp.json() or {}
+                    except Exception:
+                        st.error(f"Resposta inválida do backend: {resp.text}")
+                        st.stop()
+
                 vrid = data.get("versao_revisada_id")
 
                 if not vrid:
@@ -1176,7 +1150,8 @@ elif page == "3 — Revisar & Apontamentos":
                 meta_cols[4].write(f"**Revisão:** {'Sim' if a.get('tem_revisao') else 'Não'}")
 
                 # ações
-                b1, b2, b3 = st.columns([1, 1, 1.4])
+                b1, b2, b3, b4 = st.columns([1, 1, 1, 1.4])
+
                 with b1:
                     if a_status != "Resolvido":
                         if st.button("✅ Resolver", key=f"resolver_{a_id}"):
@@ -1198,6 +1173,35 @@ elif page == "3 — Revisar & Apontamentos":
                                     st.rerun()
 
                 with b3:
+                    # --- NOVO BOTÃO DE EXCLUSÃO ---
+                    # Só permitimos excluir se for um ERRO (opcional, mas recomendado)
+                    if a_tipo == "ERRO":
+                        # Criamos um estado de confirmação temporário por ID
+                        confirm_key = f"confirm_del_{a_id}"
+                        if st.session_state.get(confirm_key):
+                            col_del1, col_del2 = st.columns(2)
+                            with col_del1:
+                                if st.button("✔️ Sim", key=f"do_del_{a_id}", type="primary"):
+                                    # CHAMA O NOVO ENDPOINT DE HARD RESET
+                                    rr = post(
+                                        f"/workflow/versao/{int(versao_id)}/excluir-e-reprocessar?apontamento_id={int(a_id)}")
+                                    if rr:
+                                        st.session_state[confirm_key] = False
+                                        clear_after_workflow()
+                                        st.toast(f"Registro da linha {a.get('linha')} excluído. Versão reprocessada!",
+                                                 icon="🗑️")
+                                        st.rerun()
+                            with col_del2:
+                                if st.button("❌", key=f"cancel_del_{a_id}"):
+                                    st.session_state[confirm_key] = False
+                                    st.rerun()
+                        else:
+                            if st.button("🗑️ Excluir", key=f"btn_del_{a_id}",
+                                         help="Exclui a nota e reprocessa a versão"):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
+
+                with b4:
                     vr = a.get("versao_revisada_id")
                     if a.get("tem_revisao") and vr:
                         url = f"{API_BASE}/export/versao/{int(vr)}"
@@ -1330,19 +1334,6 @@ elif page == "3 — Revisar & Apontamentos":
             prep_key = f"ap_pending_apply_{versao_id}"
 
 
-            def _safe_int(v):
-                try:
-                    if v is None:
-                        return None
-                    s = str(v).strip()
-                    if s == "":
-                        return None
-                    # aceita "15.0" vindo de pandas às vezes
-                    if "." in s:
-                        s = s.split(".")[0]
-                    return int(s)
-                except Exception:
-                    return None
 
 
             bad = st.session_state[df_key][~st.session_state[df_key]["ID"].astype(str).str.match(r"^\d+(\.0)?$")]
@@ -1350,45 +1341,6 @@ elif page == "3 — Revisar & Apontamentos":
                 st.error("Existem linhas com ID inválido (texto) — isso impede preparar aplicação.")
                 st.dataframe(bad[["ID", "Tipo", "Código", "Linha", "Resolvido"]].head(50))
                 st.stop()
-
-
-            def compute_changes(df_base, df_atual):
-                base_map = {}
-                invalid_base = 0
-                for _, row in df_base.iterrows():
-                    ap_id = _safe_int(row.get("ID"))
-                    if ap_id is None:
-                        invalid_base += 1
-                        continue
-                    base_map[ap_id] = parse_bool(row.get("Resolvido"))
-
-                curr_map = {}
-                invalid_curr = 0
-                for _, row in df_atual.iterrows():
-                    ap_id = _safe_int(row.get("ID"))
-                    if ap_id is None:
-                        invalid_curr += 1
-                        continue
-                    curr_map[ap_id] = parse_bool(row.get("Resolvido"))
-
-                # (opcional) log no Streamlit se tiver inválidos
-                if invalid_base or invalid_curr:
-                    st.warning(
-                        f"Algumas linhas foram ignoradas por ID inválido: base={invalid_base}, atual={invalid_curr}"
-                    )
-
-                to_resolver = []
-                to_reabrir = []
-
-                for ap_id, base_res in base_map.items():
-                    curr_res = curr_map.get(ap_id, base_res)
-
-                    if (base_res is False) and (curr_res is True):
-                        to_resolver.append(ap_id)
-                    elif (base_res is True) and (curr_res is False):
-                        to_reabrir.append(ap_id)
-
-                return to_resolver, to_reabrir
 
 
             # ---------------------------
@@ -1528,7 +1480,7 @@ elif page == "3 — Revisar & Apontamentos":
                             clear_after_workflow()
 
                             # ✅ vai para exportar
-                            st.session_state.page = "4 — Exportar"
+                            st.session_state["page"] = "5 — Exportar"
                             st.rerun()
 
 

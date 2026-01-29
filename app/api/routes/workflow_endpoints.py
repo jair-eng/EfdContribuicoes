@@ -3,14 +3,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.models.efd_revisao import EfdRevisao
 from app.fiscal.regras.registry import get_regra_por_codigo
+from app.fiscal.scanner import FiscalScanner
 from app.schemas.helpers import carregar_linhas_sped, extrair_credito_total
 from app.services.revision_service import materializar_versao_revisada
 from app.services.workflow_service import WorkflowService
 from app.db.session import get_db
-from app.db.models import EfdVersao, EfdApontamento
+from app.db.models import EfdVersao, EfdApontamento, EfdRegistro
 from app.schemas.workflow import ConfirmarRevisaoIn, RevisaoFiscal
 from sqlalchemy import or_, func
 from typing import Optional
+from sqlalchemy import delete
 from fastapi import Body
 from app.fiscal.contexto import build_ctx_exportacao
 import logging
@@ -62,6 +64,7 @@ def confirmar_revisao(
     payload: Optional[ConfirmarRevisaoIn] = Body(default=None),
     db: Session = Depends(get_db),
 ):
+    meta_final = {}
 
     try:
         versao = db.query(EfdVersao).filter(EfdVersao.id == versao_id).first()
@@ -172,17 +175,17 @@ def confirmar_revisao(
                     EfdRevisao.apontamento_id == int(ap.id),
                 ).delete(synchronize_session=False)
 
-                novas = regra.gerar_revisoes(ctx) or []
+                novas = regra.gerar_revisoes_exp_ressarc_v1(ctx) or []
                 revisoes.extend(novas)
 
         detalhe = {
-            "impacto_por_cfop": meta_final.get("impacto_por_cfop") or {},
-            "impacto_consolidado": meta_final.get("impacto_consolidado"),
-            "metodo": meta_final.get("metodo"),
-            "fonte": meta_final.get("fonte"),
-            "cenario": meta_final.get("cenario"),
-            "cfops_detectados": meta_final.get("cfops_detectados"),
-            "cfops_top": meta_final.get("cfops_top"),
+            "impacto_por_cfop": (meta_final or {}).get("impacto_por_cfop") or {},
+            "impacto_consolidado": (meta_final or {}).get("impacto_consolidado"),
+            "metodo": (meta_final or {}).get("metodo"),
+            "fonte": (meta_final or {}).get("fonte"),
+            "cenario": (meta_final or {}).get("cenario"),
+            "cfops_detectados": (meta_final or {}).get("cfops_detectados"),
+            "cfops_top": (meta_final or {}).get("cfops_top"),
         }
 
         for r in revisoes:
@@ -258,3 +261,81 @@ def validar_versao(versao_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"versao_id": versao_id, "status": versao.status, "message": "Versão validada com sucesso."}
+
+
+@router.post("/versao/{versao_id}/excluir-e-reprocessar", status_code=status.HTTP_200_OK)
+def excluir_registro_e_reprocessar(
+        apontamento_id: int,
+        db: Session = Depends(get_db),
+):
+    """
+    Ação definitiva: Exclui a nota problemática e limpa todos os apontamentos
+    para recalcular a apuração do zero (Hard Reset).
+    """
+    try:
+        # 1. Localização e Validação
+        ap = db.query(EfdApontamento).filter(EfdApontamento.id == apontamento_id).first()
+        if not ap:
+            raise HTTPException(404, "Apontamento não encontrado.")
+
+        reg = db.query(EfdRegistro).filter(EfdRegistro.id == ap.registro_id).first()
+        if not reg:
+            raise HTTPException(404, "Registro original não encontrado.")
+
+        versao = db.query(EfdVersao).filter(EfdVersao.id == ap.versao_id).first()
+        if versao.status == "EXPORTADA":
+            raise HTTPException(400, "⚠️ Versão bloqueada para alterações (EXPORTADA).")
+
+        # 2. Execução da Exclusão Lógica (Overlay)
+        # Removemos revisões de correção anteriores, pois a nota será deletada
+        db.query(EfdRevisao).filter(
+            EfdRevisao.versao_origem_id == ap.versao_id,
+            EfdRevisao.registro_id == ap.registro_id
+        ).delete(synchronize_session=False)
+
+        nova_revisao = EfdRevisao(
+            versao_origem_id=int(ap.versao_id),
+            registro_id=int(ap.registro_id),
+            reg=str(reg.reg),
+            acao="DELETE",
+            motivo_codigo="EXCLUSAO_USUARIO",
+            apontamento_id=int(ap.id),
+            revisao_json={
+                "detalhe": "Usuário optou por excluir o registro para sanear a estrutura do arquivo.",
+                "linha_referencia": int(reg.linha)
+            }
+        )
+        db.add(nova_revisao)
+        db.flush()
+
+        # 3. O HARD RESET (Igual ao comportamento que você prefere)
+        # Limpamos a tabela para que o scanner não trabalhe com lixo de memória
+        db.execute(
+            delete(EfdApontamento).where(EfdApontamento.versao_id == ap.versao_id)
+        )
+
+        # 4. REPROCESSAMENTO TOTAL
+        # preservar_resolvidos=False força o sistema a revalidar tudo sob a nova ótica (sem a nota excluída)
+        scan_res = FiscalScanner.scan_versao(
+            db,
+            versao_id=int(ap.versao_id),
+            preservar_resolvidos=False,
+            aplicar_revisoes=True
+        )
+
+        # Atualiza status para garantir que o fluxo de revisão continue
+        versao.status = "EM_REVISAO"
+
+        db.commit()
+
+        return {
+            "versao_id": ap.versao_id,
+            "registro_excluido": reg.id,
+            "status": "PROCESSADO",
+            "scan_info": scan_res
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.exception("Falha no reprocessamento pós-exclusão")
+        raise HTTPException(status_code=500, detail=f"Erro ao reprocessar: {str(e)}")

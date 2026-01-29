@@ -23,6 +23,7 @@ router = APIRouter(prefix="/workflow", tags=["Apontamentos"])
 class ReprocessarPayload(BaseModel):
     preservar_resolvidos: bool = True
     motivo: Optional[str] = None
+    aplicar_revisoes: bool = True
 
 @router.post("/versao/{versao_id}/reprocessar", status_code=status.HTTP_200_OK)
 def reprocessar_apontamentos(
@@ -79,6 +80,7 @@ def reprocessar_apontamentos(
             db,
             versao_id=versao_id,
             preservar_resolvidos=False,
+            aplicar_revisoes=bool(getattr(payload, "aplicar_revisoes", True)),
         )
 
         # -----------------------------
@@ -140,6 +142,8 @@ def reprocessar_apontamentos(
             "after_resolvidos": int(after_res),
             "scan_result": res,
             "message": "Reprocessamento TOTAL: apontamentos recriados e forçados para pendente.",
+            "aplicar_revisoes": bool(getattr(payload, "aplicar_revisoes", True)),
+
         }
 
     except HTTPException:

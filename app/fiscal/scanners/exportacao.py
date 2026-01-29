@@ -5,6 +5,8 @@ from decimal import Decimal
 from typing import Sequence, Tuple
 
 
+
+
 def _dec_br(v) -> Decimal:
     try:
         s = str(v or "").strip()
@@ -152,6 +154,8 @@ def montar_c190_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         if not cfop.startswith("7"):
             continue
 
+
+
         if anchor is None or int(r.id) < int(anchor.id):
             anchor = r
 
@@ -159,6 +163,7 @@ def montar_c190_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
             "cst_icms": str(dados[0] or "").strip(),
             "cfop": cfop,
             "vl_opr": dados[3],  # vem "1.234,56" -> regra converte
+            "registro_id": r.id,  # Adicione isso para auditoria na regra
         })
 
     if not itens or anchor is None:
@@ -226,6 +231,8 @@ def montar_c170_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         itens.append({
             "cfop": cfop,
             "vl_opr": vl_item,  # string "404,16" -> regra converte
+            "registro_id": r.id,
+            "pai_id": getattr(r, "pai_id", None)
         })
 
     if not itens or anchor is None:
@@ -247,26 +254,50 @@ def montar_c170_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         dados=dados_final,
     )
 def coletar_creditos_bloco_m(registros_db):
+    """
+    Heurística segura para coletar créditos apurados:
+      - PIS: M100 (VL_CRED) e/ou M200 (VL_TOT_CONT_NC)
+      - COFINS: M500 (VL_CRED) e/ou M600 (VL_TOT_CONT_NC)
+    Retorna strings pra não quebrar JSON/meta.
+    """
     cred_pis = Decimal("0")
     cred_cof = Decimal("0")
 
+    def pick_max(dados, idxs):
+        best = Decimal("0")
+        for idx in idxs:
+            if 0 <= idx < len(dados):
+                v = _dec_br(dados[idx])
+                if v > best:
+                    best = v
+        return best
+
     for r in registros_db:
         reg = (r.reg or "").strip()
-        if reg not in ("M100", "M200"):
-            continue
-
         dados = (r.conteudo_json or {}).get("dados") or []
-        tail = dados[-8:] if len(dados) >= 8 else dados
-        nums = [_dec_br(v) for v in tail]
-        maior = max(nums, default=Decimal("0"))
 
+        # -------- PIS --------
         if reg == "M100":
-            cred_pis = max(cred_pis, maior)
-        else:
-            cred_cof = max(cred_cof, maior)
+            # índices comuns onde aparece VL_CRED no M100 (varia por leiaute),
+            # mas geralmente fica perto do meio/final.
+            # Tentamos alguns candidatos sem explodir.
+            cred_pis = max(cred_pis, pick_max(dados, [7, 11, 14]))
 
-    return {"credito_pis": str(cred_pis), "credito_cofins": str(cred_cof)}
+        elif reg == "M200":
+            # M200 normalmente começa com o total do período e repete no final
+            cred_pis = max(cred_pis, pick_max(dados, [0, len(dados) - 1]))
 
+        # -------- COFINS --------
+        elif reg == "M500":
+            cred_cof = max(cred_cof, pick_max(dados, [7, 11, 14]))
+
+        elif reg == "M600":
+            cred_cof = max(cred_cof, pick_max(dados, [0, len(dados) - 1]))
+
+    return {
+        "credito_pis": str(cred_pis),
+        "credito_cofins": str(cred_cof),
+    }
 def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
     flags: Dict[str, Any] = {
@@ -332,6 +363,7 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
             "cst_icms": str(dados[0] or "").strip(),
             "cfop": cfop,
             "vl_opr": dados[3],  # string br -> regra converte
+            "registro_id": r.id,
         })
 
     if not itens or anchor is None:
@@ -351,8 +383,13 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         linha=int(anchor.linha),
         dados=dados_final,
     )
+
+
 def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+    # 1. Identificação rápida dos registros presentes
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
+
+    # 2. Coleta de Metadados (Flags)
     flags = {
         "tem_1200": "1200" in regs_presentes,
         "tem_1210": "1210" in regs_presentes,
@@ -360,6 +397,7 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     }
     flags.update(coletar_flags_bloco_m(registros_db))
 
+    # 3. Filtragem de C170
     c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
     if not c170s:
         return None
@@ -368,11 +406,15 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     anchor: Optional[EfdRegistro] = None
 
     for r in c170s:
+        # Se o FiscalScanner já marcou o registro como PF, ele nem deveria estar no registros_db
+        # (se você passou o rows_limpas). Mas adicionamos segurança extra aqui.
+
         dados = (r.conteudo_json or {}).get("dados") or []
         if len(dados) < 10:
             continue
 
         cfop = str(dados[9] or "").strip()
+        # Filtro de entradas (1xxx e 2xxx)
         if not (len(cfop) == 4 and cfop.isdigit() and (cfop.startswith("1") or cfop.startswith("2"))):
             continue
 
@@ -381,14 +423,18 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         if anchor is None or int(r.id) < int(anchor.id):
             anchor = r
 
+        # ✅ ADICIONADO: registro_id e pai_id para permitir que a regra valide PF
         itens.append({
             "cfop": cfop,
             "vl_opr": vl_item,
+            "registro_id": int(r.id),
+            "pai_id": getattr(r, "pai_id", None)
         })
 
     if not itens or anchor is None:
         return None
 
+    # 4. Atualização de indicadores de perfil
     flags.update(coletar_creditos_bloco_m(registros_db))
     perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
     flags["perfil_monofasico"] = perfil_monofasico
@@ -402,4 +448,6 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         reg="C170_IND_TORRADO_AGG",
         linha=int(anchor.linha),
         dados=dados_final,
+        # O DTO do agregador em si nunca é PF, pois ele é uma soma de vários registros.
+        is_pf=False
     )

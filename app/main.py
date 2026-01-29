@@ -14,7 +14,15 @@ from app.api.empresa_endpoints import router as empresa_router
 from app.api.routes.revision_endpoints import router as revision_router
 import app.db.models.models_all # noqa  ✅ garante que todos os models foram carregados
 from app.api.routes.c170_endpoints import router as c170_router
+import logging
+import sys
 
+logging.basicConfig(
+    level=logging.INFO,  # mude para DEBUG se quiser
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 
 
 APP_TITLE = "SPED Créditos"

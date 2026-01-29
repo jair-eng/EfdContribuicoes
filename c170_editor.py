@@ -1,13 +1,14 @@
-
 import streamlit as st
 import pandas as pd
 import requests
-from ui_utils import clear_after_workflow, api_url
-
+from ui_utils import api_url, post, TIMEOUT
+import traceback
 
 
 def render_editor_c170():
-    st.subheader("C170 — Editor manual (CFOP / CST PIS / CST COFINS)")
+
+
+    st.subheader("C170 — Editor de Alta Performance (Modo Global)")
 
     if st.session_state.get("selected_versao_id") is None:
         st.info("Selecione uma versão na etapa '2 — Selecionar Versão'.")
@@ -15,146 +16,153 @@ def render_editor_c170():
 
     versao_id = int(st.session_state.get("selected_versao_id") or 0)
 
-    # -----------------------------
-    # Controles
-    # -----------------------------
-    col1, col2, col3 = st.columns([2, 2, 2])
-    with col1:
-        limit = st.number_input("Linhas por página", min_value=50, max_value=1000, value=200, step=50)
-    with col2:
-        offset = st.number_input("Offset", min_value=0, value=0, step=int(limit))
-    with col3:
-        somente_alterados = st.checkbox("Somente alterados", value=False)
+    # ---------------------------------------------------------
+    # PAINEL DE FILTROS
+    # ---------------------------------------------------------
+    with st.expander("🔍 Filtros de Busca e Escopo", expanded=True):
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            filtro_cfop = st.text_input("Filtrar CFOP atual", placeholder="ex: 1102")
+        with f2:
+            filtro_cst_pis = st.text_input("Filtrar CST PIS atual", placeholder="ex: 73")
+        with f3:
+            limit_preview = st.number_input("Preview (linhas na tela)", 10, 500, 100)
 
-    # se seu endpoint não suporta, comente esta linha e o checkbox
-    q_alt = "&alterado=1" if somente_alterados else ""
+        st.caption("⚠️ O preview abaixo mostra apenas uma amostra. A 'Ação em Massa' atingirá TODO o banco.")
 
-    # -----------------------------
-    # Carrega C170 (GET)
-    # -----------------------------
-    url = api_url(f"/workflow/versao/{versao_id}/c170?limit={int(limit)}&offset={int(offset)}{q_alt}")
+    # Normaliza inputs (evita espaços / comparações erradas)
+    filtro_cfop_norm = (filtro_cfop or "").strip()
+    filtro_cst_pis_norm = (filtro_cst_pis or "").strip()
+
+    # ---------------------------------------------------------
+    # CARGA DE PREVIEW (preferir filtro no servidor via params)
+    # ---------------------------------------------------------
+    url_preview = api_url(f"/workflow/versao/{versao_id}/c170")
+    params = {"limit": int(limit_preview)}
+
+    # Se o backend suportar, já filtra no servidor.
+    # Se não suportar, ele deve ignorar ou retornar erro claro (422/400),
+    # mas não deve quebrar o front com KeyError.
+    if filtro_cfop_norm:
+        params["cfop"] = filtro_cfop_norm
+    if filtro_cst_pis_norm:
+        params["cst_pis"] = filtro_cst_pis_norm
 
     try:
-        resp = requests.get(url, timeout=60)
+        resp = requests.get(url_preview, params=params, timeout=TIMEOUT)
         if resp.status_code != 200:
-            st.error(f"Erro {resp.status_code}: {resp.text}")
+            st.error(f"Erro ao carregar preview: {resp.text}")
             st.stop()
 
-        data = resp.json() or {}
-        items = data.get("items") or []
-        total = int(data.get("total", 0) or 0)
+        items = resp.json().get("items") or []
+        rows = []
+
+        for it in items:
+            d = it.get("dados") or []
+
+            # Defensivo: evita KeyError e evita comparar int vs str
+            cfop_atual = str(d[9]).strip() if len(d) > 9 and d[9] is not None else ""
+            cst_pis_atual = str(d[23]).strip() if len(d) > 23 and d[23] is not None else ""
+            cst_cof_atual = str(d[29]).strip() if len(d) > 29 and d[29] is not None else ""
+
+            rows.append({
+                "registro_id": it.get("registro_id"),
+                "linha": it.get("linha", 0),
+                "cfop": cfop_atual,
+                "cst_pis": cst_pis_atual,
+                "cst_cofins": cst_cof_atual,
+            })
+
+        df_preview = pd.DataFrame(rows)
+
+        # Se o backend NÃO filtrar (ou retornar amostra maior), filtra também no client.
+        if filtro_cfop_norm and "cfop" in df_preview.columns:
+            df_preview = df_preview[df_preview["cfop"].astype(str).str.strip() == filtro_cfop_norm]
+        if filtro_cst_pis_norm and "cst_pis" in df_preview.columns:
+            df_preview = df_preview[df_preview["cst_pis"].astype(str).str.strip() == filtro_cst_pis_norm]
 
     except Exception as e:
-        st.exception(e)
+        st.error(f"Falha de conexão: {e}")
+        st.text(traceback.format_exc())
         st.stop()
 
-    st.caption(f"Versão: {versao_id} | Total C170: {total} | Mostrando: {len(items)}")
+    # ---------------------------------------------------------
+    # AÇÃO EM MASSA INTELIGENTE (Escopo Global)
+    # ---------------------------------------------------------
+    with st.form("form_massa_global"):
+        st.markdown("### ⚡ Aplicar Alteração em TODA a Base (Filtro Global)")
+        st.write(
+            f"A alteração será aplicada a **todos** os registros com CFOP '{filtro_cfop_norm}' "
+            f"e CST '{filtro_cst_pis_norm}' no banco de dados."
+        )
 
-    if not items:
-        st.warning("Nenhum C170 encontrado nessa página/filtro.")
-        st.stop()
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            novo_cfop = st.text_input("Novo CFOP", placeholder="Ex: 1102")
+        with c2:
+            novo_pis = st.text_input("Novo CST PIS", placeholder="Ex: 51")
+        with c3:
+            novo_cof = st.text_input("Novo CST COFIN", placeholder="Ex: 51")
+        with c4:
+            motivo = st.text_input("Motivo", value="CORRECAO_GLOBAL_CFOP_CST")
 
-    # -----------------------------
-    # Tabela (resumo)
-    # CFOP = 9, CST_PIS = 23, CST_COFINS = 29
-    # -----------------------------
-    rows = []
-    for it in items:
-        dados = it.get("dados") or []
+        confirmar = st.form_submit_button("🚀 EXECUTAR ALTERAÇÃO GLOBAL")
 
-        def get(idx, default=""):
-            return dados[idx] if idx < len(dados) else default
+        if confirmar:
+            novo_cfop_norm = (novo_cfop or "").strip()
+            novo_pis_norm = (novo_pis or "").strip()
+            novo_cof_norm = (novo_cof or "").strip()
 
-        rows.append({
-            "registro_id": int(it["registro_id"]),
-            "linha": int(it.get("linha", 0) or 0),
-            "alterado": bool(it.get("alterado", False)),
-            "cfop": get(9),
-            "cst_pis": get(23),
-            "cst_cofins": get(29),
-            "vl_item": get(5),
-            "cst_icms": get(8),
-        })
+            if not filtro_cfop_norm and not filtro_cst_pis_norm:
+                st.warning("⚠️ Por segurança, defina ao menos um filtro (CFOP ou CST) para a alteração global.")
+            elif not (novo_cfop_norm or novo_pis_norm or novo_cof_norm):
+                st.warning("Defina ao menos um valor novo para aplicar.")
+            else:
+                payload = {
+                    "versao_origem_id": versao_id,
+                    "motivo_codigo": motivo,
+                    "escopo": "GLOBAL",
+                    "filtros_origem": {
+                        "cfop": filtro_cfop_norm or None,
+                        "cst_pis": filtro_cst_pis_norm or None,
+                    },
+                    "valores_novos": {
+                        "cfop": novo_cfop_norm or None,
+                        "cst_pis": novo_pis_norm or None,
+                        "cst_cofins": novo_cof_norm or None,
+                    },
+                }
 
-    df = pd.DataFrame(rows).sort_values(["linha"])
+                with st.spinner("O Backend está processando CNPJs, ignorando CPFs e recalculando C100..."):
+                    res = requests.post(
+                        api_url(f"/workflow/versao/{versao_id}/c170/revisar-global"),
+                        json=payload,
+                        timeout=120,
+                    )
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+                    if res.status_code == 200:
+                        data = res.json()
+                        qtd_sucesso = data.get("total_alterado", 0)
+                        qtd_ignorado = data.get("total_ignorado_pf", 0)
 
-    # -----------------------------
-    # Seleção por registro_id
-    # -----------------------------
-    st.markdown("### Editar um item")
+                        st.success(
+                            f"Sucesso! {qtd_sucesso} registros foram corrigidos e as notas (C100) foram recalculadas."
+                        )
 
-    default_registro_id = int(df.iloc[0]["registro_id"])
-    registro_id = st.number_input("registro_id (C170)", min_value=1, value=default_registro_id, step=1)
+                        if qtd_ignorado > 0:
+                            st.warning(
+                                f"ℹ️ {qtd_ignorado} registros foram mantidos com a informação antiga pois pertencem "
+                                f"a Pessoas Físicas (CPF) e não geram crédito."
+                            )
 
-    selected = df[df["registro_id"] == int(registro_id)]
-    if not selected.empty:
-        sel = selected.iloc[0].to_dict()
-        st.caption(
-            f"Linha SPED: {sel['linha']} | Atual: CFOP={sel['cfop']} | PIS={sel['cst_pis']} | COFINS={sel['cst_cofins']}")
-        default_cfop = str(sel["cfop"] or "")
-        default_pis = str(sel["cst_pis"] or "")
-        default_cof = str(sel["cst_cofins"] or "")
-    else:
-        st.warning("registro_id não está nesta página. Ajuste offset/limit ou digite mesmo assim.")
-        default_cfop = ""
-        default_pis = ""
-        default_cof = ""
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(f"Falha na API: {res.text}")
 
-    colA, colB, colC, colD = st.columns([2, 2, 2, 2])
-    with colA:
-        cfop = st.text_input("Novo CFOP", value=default_cfop, placeholder="ex: 1102").strip() or None
-    with colB:
-        cst_pis = st.text_input("Novo CST PIS", value=default_pis, placeholder="ex: 50").strip() or None
-    with colC:
-        cst_cofins = st.text_input("Novo CST COFINS", value=default_cof, placeholder="ex: 50").strip() or None
-    with colD:
-        motivo_codigo = st.text_input("motivo_codigo", value="MANUAL_C170").strip() or "MANUAL_C170"
-
-    # -----------------------------
-    # Aplicar (POST)
-    # -----------------------------
-    if st.button("✅ Aplicar revisão (REPLACE_LINE)", key="aplicar_patch_c170"):
-        payload = {
-            "versao_origem_id": int(versao_id),
-            "cfop": cfop,
-            "cst_pis": cst_pis,
-            "cst_cofins": cst_cofins,
-            "motivo_codigo": motivo_codigo,
-            "apontamento_id": None,
-        }
-
-        if not payload["cfop"] and not payload["cst_pis"] and not payload["cst_cofins"]:
-            st.error("Informe pelo menos 1 campo para alterar (CFOP ou CSTs).")
-            st.stop()
-
-        try:
-            url2 = api_url(f"/workflow/registro/{int(registro_id)}/revisar-c170")
-            resp2 = requests.post(url2, json=payload, timeout=60)
-
-            if resp2.status_code != 200:
-                st.error(f"Erro {resp2.status_code}: {resp2.text}")
-                st.stop()
-
-            out = resp2.json() or {}
-            if out.get("status") != "OK":
-                st.error(out)
-                st.stop()
-
-            st.success(f"Revisão criada! revisao_id={out.get('revisao_id')} (linha {out.get('linha')})")
-
-            warnings = out.get("warnings") or []
-            if warnings:
-                st.warning("Avisos:\n- " + "\n- ".join(map(str, warnings)))
-
-            try:
-                clear_after_workflow()
-            except Exception:
-                pass
-
-            st.rerun()
-
-        except Exception as e:
-            st.exception(e)
-            st.stop()
+    # ---------------------------------------------------------
+    # VISUALIZAÇÃO DE CONFERÊNCIA
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.caption(f"Amostra atual (limitada a {limit_preview} linhas):")
+    st.dataframe(df_preview, use_container_width=True, hide_index=True)

@@ -8,6 +8,7 @@ from app.fiscal.regras.achado import Achado
 from app.fiscal.regras.base_regras import RegraBase
 
 
+
 class RegraC100EntradaRelevante(RegraBase):
     """
     C100 (SPED Fiscal - ICMS/IPI) — layout observado:
@@ -32,6 +33,10 @@ class RegraC100EntradaRelevante(RegraBase):
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
         if registro.reg != "C100":
+            return None
+
+        # Não bate no banco, é instantâneo.
+        if registro.is_pf:
             return None
 
         dados: List[Any] = registro.dados or []

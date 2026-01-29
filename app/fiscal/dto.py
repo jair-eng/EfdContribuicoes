@@ -2,16 +2,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
+
 @dataclass(slots=True)
 class RegistroFiscalDTO:
-    """
-    DTO desacoplado do ORM.
-    O scanner e as regras só enxergam isso.
-    """
     id: int
     reg: str
     linha: int
     dados: List[Any]
+
+    # --- NOVOS CAMPOS DE CONTEXTO ---
+    is_pf: bool = False  # Indica se o registro pertence a um CPF
+    versao_id: Optional[int] = None  # Necessário para consultas de apoio
 
     base_credito: float = 0.0
     valor_credito: float = 0.0

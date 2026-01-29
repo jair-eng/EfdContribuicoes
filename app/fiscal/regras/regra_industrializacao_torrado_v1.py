@@ -2,6 +2,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from app.config.settings import IND_TORRADO_ALIQUOTA_EFETIVA  # você já queria no settings
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.base_regras import RegraBase
+import logging
+
+# Opcional: Configurar o logger para este módulo específico
+logger = logging.getLogger(__name__)
 
 
 class RegraIndustrializacaoTorradoV1(RegraBase):
@@ -11,6 +15,10 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
     nome = "Industrialização (Torrado)"
 
     def aplicar(self, registro: RegistroFiscalDTO):
+
+        # 🛡️ Se por algum motivo o agregador for marcado como PF, ignore
+        if getattr(registro, 'is_pf', False):
+            return None
         reg = (registro.reg or "").strip()
         if reg not in ("C190_IND_TORRADO_AGG", "C170_IND_TORRADO_AGG"):
             return None
@@ -29,11 +37,14 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
         for it in dados[1:]:
             if not isinstance(it, dict):
                 continue
-            base_total += self.dec_br(it.get("vl_opr"))
-            qtd += 1
+            valor_str = it.get("vl_opr")
+            rid = it.get("registro_id")  # Para debug se necessário
 
-        if base_total <= 0:
-            return None
+            try:
+                base_total += self.dec_br(valor_str)
+                qtd += 1
+            except Exception as e:
+                logger.error(f"Erro ao converter valor no registro {rid}: {e}")
 
         cred = (base_total * IND_TORRADO_ALIQUOTA_EFETIVA).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP

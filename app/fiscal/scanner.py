@@ -12,72 +12,148 @@ from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_e
 from app.fiscal.varredura import executar_varredura
 from app.fiscal.regras.achado import Achado
 from app.fiscal.scanners.exportacao import montar_meta_fiscal
+from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
+from app.sped.c170_utils import linhas_para_rows_like
+import logging
 
+from app.sped.logic.consolidador import eh_pf_por_c100
+
+logger = logging.getLogger(__name__)
 
 
 class FiscalScanner:
     @staticmethod
     def scan_versao(
-        db: Session,
-        *,
-        versao_id: int,
-        preservar_resolvidos: bool = True,
+            db: Session,
+            *,
+            versao_id: int,
+            preservar_resolvidos: bool = True,
+            aplicar_revisoes: bool = True,
     ) -> Dict[str, Any]:
 
-        # 1) Buscar registros
+        # 1) Buscar registros originais (Apenas 1 SELECT - Fonte da Verdade)
         rows: List[EfdRegistro] = (
             db.query(EfdRegistro)
             .filter(EfdRegistro.versao_id == versao_id)
             .order_by(EfdRegistro.linha.asc())
             .all()
         )
+        linha_to_registro_id = {int(r.linha): int(r.id) for r in rows}
 
-
-
-        # 2) Converter para DTO
-        dtos: List[RegistroFiscalDTO] = []
+        # --- [OTIMIZAÇÃO DE PERFORMANCE: MAPAS EM MEMÓRIA] ---
+        # 1.1) Mapa de Participantes: Classifica quem é PF (CPF com 11 dígitos)
+        participantes_pf = {}
         for r in rows:
-            conteudo = r.conteudo_json or {}
-            dados = conteudo.get("dados") or []
+            if (r.reg or "").strip() == "0150":
+                dados_0150 = (r.conteudo_json or {}).get("dados") or []
+                if len(dados_0150) > 4:
+                    cod_part = str(dados_0150[0]).strip()
+                    # Limpa pontuação do CPF para contagem real
+                    cpf_limpo = "".join(filter(str.isdigit, str(dados_0150[4] or "")))
+                    participantes_pf[cod_part] = (len(cpf_limpo) == 11)
+
+        # 1.2) Mapa de Hierarquia: ID do C100 -> COD_PART
+        mapa_pai_participante = {}
+        for r in rows:
+            if (r.reg or "").strip() == "C100":
+                dados_c100 = (r.conteudo_json or {}).get("dados") or []
+                if len(dados_c100) > 2:
+                    mapa_pai_participante[str(r.id)] = str(dados_c100[2]).strip()
+
+        # 2) Aplicar Revisões (Merge em memória)
+        if aplicar_revisoes:
+            linhas = carregar_linhas_logicas_com_revisoes(db, versao_origem_id=int(versao_id))
+            rows_agg = linhas_para_rows_like(linhas)
+            fonte_base = linhas
+        else:
+            rows_agg = rows
+            fonte_base = rows
+
+        # --- 2.1) FILTRAGEM DE SEGURANÇA (O CORTE DOS 31 REGISTROS PF) ---
+        # Criamos uma lista limpa para agregadores (C190_AGG, etc) e para os DTOs
+        rows_limpas = []
+        ids_pf_detectados = set()  # Guarda IDs de registros que são PF para marcar no DTO
+
+        for r in rows_agg:
+            reg_nome = str(getattr(r, "reg", "")).strip().upper()
+            is_pf = False
+
+            # Identificação de Pessoa Física
+            if reg_nome == "C100":
+                dados = (r.conteudo_json or {}).get("dados") or []
+                cod_part = str(dados[2]).strip() if len(dados) > 2 else None
+                is_pf = participantes_pf.get(cod_part, False)
+            elif reg_nome == "C170":
+                id_pai = str(getattr(r, "pai_id", ""))
+                cod_part = mapa_pai_participante.get(id_pai)
+                is_pf = participantes_pf.get(cod_part, False)
+
+            if is_pf:
+                ids_pf_detectados.add(int(getattr(r, "registro_id", 0) or getattr(r, "id", 0)))
+                continue  # 🚀 EXPURGO: Não entra na lista de cálculo de crédito nem agregadores
+
+            rows_limpas.append(r)
+
+        # 3) Converter para DTO (LIMPO E SEM DUPLICIDADE)
+        dtos: List[RegistroFiscalDTO] = []
+
+        for l in fonte_base:
+            rid_real = int(getattr(l, "registro_id", 0) or 0)
+            if rid_real <= 0:
+                 rid_real = linha_to_registro_id.get(int(l.linha), 0)
+
+            is_pessoa_fisica = False
+            reg_nome = str(l.reg).strip().upper()
+
+            # Se o registro (ou seu pai) foi marcado como PF na lista negra
+            if reg_nome in ("C100", "C170"):
+                 if rid_real in ids_pf_detectados or int(getattr(l, "pai_id", 0) or 0) in ids_pf_detectados:
+                    is_pessoa_fisica = True
+
             dtos.append(
                 RegistroFiscalDTO(
-                    id=int(r.id),
-                    reg=str(r.reg),
-                    linha=int(r.linha),
-                    dados=dados,
+                    id=int(rid_real),
+                    reg=reg_nome,
+                    linha=int(l.linha),
+                    dados=list(l.dados or []),
+                    is_pf=is_pessoa_fisica
+                    )
                 )
-            )
 
-        # 2.3) Injetar META_FISCAL (SEMPRE)
-        meta_fiscal = montar_meta_fiscal(rows)
+
+        # 4) Injetar META_FISCAL (Sempre usando rows_limpas para consistência)
+        meta_fiscal = montar_meta_fiscal(rows_limpas)
         if meta_fiscal:
             dtos.append(meta_fiscal)
 
-        # 2.4) Injetar DTO agregador (Exportação)
-        c190_exp = montar_c190_export_agg(rows)
+        # 4,2) Injetar DTO agregador (Exportação) - USANDO LISTA LIMPA (Sem CPFs)
+        c190_exp = montar_c190_export_agg(rows_limpas)
         if c190_exp:
             dtos.append(c190_exp)
         else:
-            c170_exp = montar_c170_export_agg(rows)
+            c170_exp = montar_c170_export_agg(rows_limpas)
             if c170_exp:
                 dtos.append(c170_exp)
-        c190_ind = montar_c190_ind_torrado_agg(rows)
+
+        c190_ind = montar_c190_ind_torrado_agg(rows_limpas)
         if c190_ind:
             dtos.append(c190_ind)
         else:
-            c170_ind = montar_c170_ind_torrado_agg(rows)
+            c170_ind = montar_c170_ind_torrado_agg(rows_limpas)
             if c170_ind:
                 dtos.append(c170_ind)
 
-        # 2.5) Injetar DTO agregador (C190_AGG)
-        c190_agg = montar_c190_agg(rows)
+        #  Injetar DTO agregador (C190_AGG) - USANDO LISTA LIMPA
+        c190_agg = montar_c190_agg(rows_limpas)
         if c190_agg:
             dtos.append(c190_agg)
 
-         # 3) Executar motor fiscal
+        # 5) Executar motor fiscal
         result = executar_varredura(dtos, capturar_erros=True)
 
         # DEBUG: conferir se META_FISCAL foi injetado
+        descartados_sem_fk = 0
+        descartados_debug = []
         meta_count = sum(1 for d in dtos if (d.reg or "").strip() == "META_FISCAL")
         print("DEBUG META_FISCAL dtos:", meta_count)
 
@@ -126,7 +202,7 @@ class FiscalScanner:
             return (rid, str(tipo), _norm_codigo(codigo))
 
         # -----------------------------
-        # 4) Limpeza profissional
+        # 6) Limpeza profissional
         # -----------------------------
         q_del = db.query(EfdApontamento).filter(EfdApontamento.versao_id == versao_id)
         if preservar_resolvidos:
@@ -160,6 +236,11 @@ class FiscalScanner:
         grupos = defaultdict(lambda: {"total": Decimal("0"), "qtd": 0, "repr_registro_id": None})
 
         for a in result.apontamentos:
+            tipo = str(a.tipo)
+            codigo_norm = _norm_codigo(getattr(a, "codigo", None)) or None
+            raw_meta = getattr(a, "meta", None) or {}
+            meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+
             if _norm_codigo(a.codigo) != "C190-ENT":
                 continue
 
@@ -216,7 +297,7 @@ class FiscalScanner:
                 )
 
         # -----------------------------
-        # 5) Inserir/atualizar apontamentos
+        # 7) Inserir/atualizar apontamentos
         # -----------------------------
         tem_cafe = any(_norm_codigo(x.codigo) == "CAFE_C190_V1" for x in result.apontamentos)
 
@@ -224,14 +305,46 @@ class FiscalScanner:
         to_update_mappings: List[dict] = []
 
         for a in result.apontamentos:
-            rid = int(a.registro_id) if a.registro_id is not None else 0
-            tipo = str(a.tipo)
-            codigo_norm = _norm_codigo(getattr(a, "codigo", None)) or None
+            rid = None
+            if a.registro_id is not None:
+                try:
+                    rid = int(a.registro_id)
+                except Exception:
+                    rid = None
 
-            # ✅ se SUM será via SQL, ignore aqui
-            if codigo_norm == "C190-SUM":
+            # fallback: tenta resolver pelo meta["linha"]
+            if not rid or rid <= 0:
+                meta = dict(getattr(a, "meta", None) or {}) if isinstance(getattr(a, "meta", None), dict) else {}
+                linha_meta = meta.get("linha") or meta.get("linha_num") or meta.get("linha_referencia")
+                try:
+                    linha_i = int(linha_meta) if linha_meta is not None else None
+                except Exception:
+                    linha_i = None
+
+                if linha_i is not None:
+                    rid = linha_to_registro_id.get(linha_i)
+
+            # se ainda não achou, decide política:
+            # (A) pular o apontamento, ou (B) associar a um registro "representativo"
+            if not rid:
+                fonte_base = meta.get("fonte_base") or meta.get("fonte")
+                if fonte_base:
+                    # ancora no primeiro C170 da versão
+                    rid = next(
+                        (int(r.id) for r in rows if (r.reg or "").strip().upper() == "C170"),
+                        None
+                    )
+
+            # ❌ só descarta se ainda não conseguiu
+            if not rid:
+                descartados_sem_fk += 1
+                logger.warning(
+                    "DESCARTADO sem FK | codigo=%s | tipo=%s | fonte=%s",
+                    codigo_norm,
+                    tipo,
+                    meta.get("fonte_base") or meta.get("fonte"),
+                )
                 continue
-
             impacto = getattr(a, "impacto_financeiro", None)
 
             prio_regra = _norm_prioridade(getattr(a, "prioridade", None))
@@ -341,7 +454,7 @@ class FiscalScanner:
             {"vid": int(versao_id)}
         )
 
-        # 3) rebaixa C190-ENT se existe SUM
+        # 8) rebaixa C190-ENT se existe SUM
         sum_qtd = db.execute(
             text("""
                  SELECT COUNT(*)
@@ -362,9 +475,12 @@ class FiscalScanner:
                      """),
                 {"vid": int(versao_id)}
             )
+        logger.warning("SCAN FINAL | versao_id=%s | descartados_sem_fk=%s", versao_id, descartados_sem_fk)
 
         return {
             "apontamentos_gerados": len(to_insert),
             "erros_regras": result.erros,
             "atualizados_preservados": len(to_update_mappings),
+            "descartados_sem_fk": int(descartados_sem_fk),
+            "total_c170_processados": len([d for d in dtos if d.reg == "C170" and not d.is_pf])
         }

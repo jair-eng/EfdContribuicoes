@@ -77,8 +77,8 @@ class RegraCafeC190V1(RegraBase):
                     "aliquota_pis": self.pct(ALIQUOTA_PIS),
                     "aliquota_cofins": self.pct(ALIQUOTA_COFINS),
                     "aliquota_total": self.pct(ALIQUOTA_TOTAL),
-                    "credito_pis_estimado": self.br_num(cred_pis),
-                    "credito_cofins_estimado": self.br_num(cred_cof),
+                    "credito_pis": self.br_num(cred_pis),
+                    "credito_cofins": self.br_num(cred_cof),
                     "impacto_consolidado": self.br_num(impacto),
                     "metodo": f"C190 agregado (VL_OPR x {self.pct(ALIQUOTA_TOTAL)})",
                 }

@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, Any, List
 from app.fiscal.dto import RegistroFiscalDTO
+from app.sped.logic.consolidador import _to_decimal
 
 class RegraF600Insumos:
     """
@@ -15,14 +16,6 @@ class RegraF600Insumos:
     nome = "Possível crédito não aproveitado (F600)"
     tipo = "OPORTUNIDADE"
 
-    def _to_decimal(self, s: Optional[str]) -> Optional[Decimal]:
-        if not s:
-            return None
-        txt = str(s).strip().replace(".", "").replace(",", ".")
-        try:
-            return Decimal(txt)
-        except Exception:
-            return None
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Dict[str, Any]]:
         if registro.reg != "F600":
@@ -31,8 +24,8 @@ class RegraF600Insumos:
         dados: List[Any] = registro.dados or []
 
         # ⚠️ Ajuste os índices conforme seu layout real
-        base = self._to_decimal(dados[5]) if len(dados) > 5 else None
-        credito = self._to_decimal(dados[7]) if len(dados) > 7 else None
+        base = _to_decimal(dados[5]) if len(dados) > 5 else None
+        credito = _to_decimal(dados[7]) if len(dados) > 7 else None
 
         # Precisa ter base positiva
         if base is None or base <= 0:
