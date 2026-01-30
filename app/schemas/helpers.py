@@ -1,4 +1,6 @@
 from app.db.models import EfdRegistro
+import streamlit as st
+
 
 
 def extrair_credito_total(ap) -> str:

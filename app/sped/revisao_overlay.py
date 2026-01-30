@@ -1,8 +1,7 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Iterable, List, Dict, Any, Optional, Literal, Tuple, Set
-from app.db.models import EfdRevisao,EfdRegistro
-from app.sped.c170_utils import _parse_linha_sped_to_reg_dados
+from typing import List, Dict, Any, Optional, Literal, Set
+from app.db.models import EfdRegistro
+from app.sped.blocoC.c170_utils import _parse_linha_sped_to_reg_dados
 from dataclasses import dataclass
 
 

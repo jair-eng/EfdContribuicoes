@@ -1,11 +1,10 @@
 from __future__ import annotations
-from typing import List, Dict, Tuple, Optional,List, Any
-from decimal import Decimal, ROUND_HALF_UP
+from typing import Dict, List, Any
+from decimal import Decimal
 from app.config.settings import ALIQUOTA_PIS_PCT, ALIQUOTA_COFINS_PCT
-from app.sped.logic.m_receita import gerar_m_receitas, extrair_receitas_c170, extrair_receitas_c190, \
+from app.sped.blocoM.m_receita import gerar_m_receitas, extrair_receitas_c170, extrair_receitas_c190, \
     extrair_receitas_c170_por_string
-from app.sped.m_utils import _reg_of_line, _rank_m, _fmt_br, _fmt_aliq, _pick_existing_m_lines, _key, _clean_sped_line, \
-    _trunc_2
+from app.sped.blocoM.m_utils import _reg_of_line, _fmt_br, _fmt_aliq, _pick_existing_m_lines, _key, _clean_sped_line
 
 
 def calcular_blocoM(corpo_bloco_m: List[str]) -> List[str]:

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from ui_utils import goto, cached_empresas, cached_arquivos, cached_versoes, cached_resumo_versao, \
     cached_apontamentos, clear_after_confirm, cached_empresa_resumo, show_error, clear_after_workflow, parse_bool, get, \
-    post, patch, api_url, TIMEOUT, normalize_apontamento, _safe_int, compute_changes
+    post, patch, api_url, TIMEOUT, normalize_apontamento, _safe_int, compute_changes, _parse_money_br
 from ui_utils import cached_health
 from c170_editor import render_editor_c170
 
@@ -1640,6 +1640,51 @@ elif page == "5 — Exportar":
 
 
     # ------------------------------------------------------------------
+    # 1500 — Valor utilizado no mês (informado pelo usuário)
+    # ------------------------------------------------------------------
+    st.divider()
+    st.markdown("### Bloco 1 — Registro 1500 (Valor utilizado no mês)")
+
+    st.caption(
+        "Informe o **valor utilizado no mês** para o registro **1500**. "
+        "Esse valor entra no SPED exportado e serve para controlar o consumo do crédito acumulado/ressarcimento."
+    )
+
+    # tenta sugerir o período do arquivo (se existir)
+    periodo_sugerido = None
+    try:
+        arquivo = (resumo or {}).get("arquivo") or {}
+        periodo_sugerido = arquivo.get("periodo")
+    except Exception:
+        periodo_sugerido = None
+
+    colv1, colv2 = st.columns([1, 2])
+    with colv1:
+        st.text_input("Período (referência)", value=str(periodo_sugerido or "—"), disabled=True)
+
+    with colv2:
+        # Aceita pt-BR: 1.234,56
+        valor_utilizado_mes_str = st.text_input(
+            "Valor utilizado no mês (R$)",
+            value=str(st.session_state.get("valor_utilizado_mes", "")),
+            placeholder="Ex: 1.234,56",
+            key="valor_utilizado_mes_input",
+        )
+
+
+    valor_utilizado_mes = _parse_money_br(valor_utilizado_mes_str)
+    if valor_utilizado_mes is None:
+        st.error("Valor inválido. Use formato pt-BR: 1.234,56")
+        bloquear_export_1500 = True
+    else:
+        bloquear_export_1500 = False
+        st.session_state["valor_utilizado_mes"] = valor_utilizado_mes_str  # guarda texto como digitado
+
+    st.info(
+        f"Valor interpretado: R$ {valor_utilizado_mes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    )
+
+    # ------------------------------------------------------------------
     # Exportar SPED
     # ------------------------------------------------------------------
     st.divider()
@@ -1650,7 +1695,8 @@ elif page == "5 — Exportar":
             st.stop()
 
         url = api_url(f"/export/versao/{int(versao_id)}")
-        resp = requests.get(url, timeout=TIMEOUT)
+        params = {"valor_utilizado_mes": f"{valor_utilizado_mes:.2f}"}
+        resp = requests.get(url, params=params, timeout=TIMEOUT)
 
         if resp.status_code >= 400:
             show_error(resp)

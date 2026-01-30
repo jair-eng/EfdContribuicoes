@@ -2,6 +2,7 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict, Any, Optional, Tuple
 from app.sped.logic.consolidador import _reg_of
+from pathlib import Path
 
 
 def _trunc_2(v: Decimal) -> Decimal:
@@ -113,3 +114,26 @@ def _pick_existing_m_lines(linhas_sped: List[str]) -> Tuple[List[str], List[str]
             continue
         manter.append(l.strip())
     return manter, []
+
+def _ensure_line(s: str) -> str:
+    s = (s or "").rstrip("\r\n").strip()
+    if not s:
+        return ""
+    if not s.startswith("|"):
+        s = "|" + s
+    if not s.endswith("|"):
+        s += "|"
+    return s
+
+def ler_linhas_exportado(path: str) -> list[str]:
+    with open(path, "r", encoding="iso-8859-1", errors="ignore") as f:
+        return [ln.rstrip("\r\n") for ln in f if ln.strip()]
+
+def caminho_sped_corrigido(nome_arquivo: str) -> str:
+    downloads = Path.home() / "Downloads"
+    pasta = downloads / "Speds Corrigidos"
+    pasta.mkdir(parents=True, exist_ok=True)
+    return str(pasta / nome_arquivo)
+
+def nome_sped_corrigido(arquivo, versao) -> str:
+    return f"EFD_{arquivo.periodo}_VERSAO_{versao.id}_CORRIGIDO.txt"

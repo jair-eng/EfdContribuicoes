@@ -4,13 +4,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
-from app.sped.c100_utils import patch_c100_totais_imposto, salvar_revisao_c100_automatica
-from app.sped.c170_utils import patch_c170_campos
+from app.sped.blocoC.c100_utils import patch_c100_totais_imposto, salvar_revisao_c100_automatica
+from app.sped.blocoC.c170_utils import patch_c170_campos
 from app.sped.formatter import formatar_linha
 from app.sped.logic.consolidador import (
     _get_dados,
     calcular_totais_filhos,norm,
-    _lookup_refs,
     popular_pai_id, eh_pf_por_c100, ensure_len  # Importante: deve estar no seu consolidador.py
 )
 

@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.models.base import Base
-
+from sqlalchemy import String
 
 class EfdVersao(Base):
     __tablename__ = "efd_versao"
@@ -15,6 +15,7 @@ class EfdVersao(Base):
     numero = Column(Integer, nullable=False, default=1)
     data_geracao = Column(DateTime, default=datetime.utcnow)
     observacao = Column(Text)
+    caminho_exportado = Column(String(1024), nullable=True)
 
     status = Column(Enum("GERADA", "EM_REVISAO", "VALIDADA", "EXPORTADA"), default="GERADA")
     retifica_de_versao_id: Mapped[int | None] = mapped_column(

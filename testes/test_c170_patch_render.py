@@ -1,4 +1,4 @@
-from app.sped.c170_utils import patch_c170_campos
+from app.sped.blocoC.c170_utils import patch_c170_campos
 from app.sped.formatter import formatar_linha
 
 

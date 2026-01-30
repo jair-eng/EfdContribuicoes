@@ -6,7 +6,11 @@ import requests
 API_BASE = "http://127.0.0.1:8000"
 TIMEOUT = 300 # 5 min
 
-
+def _clear_editor_state_for_versao(v_id: int):
+    prefix = f"ap_editor_{v_id}_"
+    for k in list(st.session_state.keys()):
+        if str(k).startswith(prefix):
+            st.session_state.pop(k, None)
 
 def parse_bool(v):
     if v is True or v is False:
@@ -232,6 +236,17 @@ def normalize_apontamento(item, idx: int):
         "resolvido": resolvido,
         "_raw": item,
     }
+
+
+def _parse_money_br(s: str) -> float:
+    s = (s or "").strip()
+    if not s:
+        return 0.0
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0  # fallback seguro
 
 
 

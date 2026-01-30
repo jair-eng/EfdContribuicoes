@@ -1,9 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
-from typing import Dict, Iterable, List, Optional, Tuple, Any
+from decimal import Decimal
+from typing import Dict, List, Tuple, Any
 from collections import defaultdict
-from app.sped.m_utils import _fmt_br, _reg_of_line, _cst_norm, _d, _nz_str, _cst2
+from app.sped.blocoM.m_utils import _fmt_br, _d, _cst2
 
 # CSTs que obrigam M400/M800 (receita CST 04/06/07/08/09)
 CSTS_RECEITA_M = {"04", "06", "07", "08", "09"}

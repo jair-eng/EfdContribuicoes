@@ -11,6 +11,7 @@ from app.services.apontamentos_export_service import ApontamentosExportService
 from app.services.export_service import exportar_sped
 import zipfile
 import uuid
+from fastapi import Query
 from pydantic import BaseModel
 from typing import List
 from io import BytesIO
@@ -65,7 +66,7 @@ def exportar_apontamentos_csv(
 
 
 @router.get("/versao/{versao_id}", status_code=status.HTTP_200_OK)
-def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
+def baixar_sped(versao_id: int,valor_utilizado_mes: float = Query(default=0.0, ge=0.0), db: Session = Depends(get_db)):
     """
     Gera o arquivo e devolve para download.
     Agora com invalidação de cache para garantir que revisões novas apareçam no TXT.
@@ -97,15 +98,20 @@ def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
                 detail=f"Export bloqueado: status '{versao.status}'. Confirme as revisões antes."
             )
 
-        # 4. 🚀 GERAÇÃO REAL E OBRIGATÓRIA
-        # Aqui o sistema vai ler o banco, aplicar seu filtro de PF/PJ e somar o Bloco M
+        # 4) 🚀 GERAÇÃO REAL (service decide o caminho final)
         print(f"⚙️ PROCESSAMENTO: Gerando SPED novo para Versão {versao_id}...")
-        exportar_sped(versao_id=versao_id, caminho_saida=str(out_path), db=db)
+
+        caminho_saida = exportar_sped(
+            versao_id=versao_id,
+            db=db,
+            valor_utilizado_mes=valor_utilizado_mes,  # ✅ repassa
+        )
+        out_path = Path(caminho_saida)
 
         db.commit()
 
-        if not out_path.exists():
-            raise HTTPException(status_code=500, detail="Falha crítica: o arquivo não foi gerado.")
+        if not out_path.exists() or not out_path.is_file():
+            raise HTTPException(500, f"Falha crítica: o arquivo não foi gerado em {out_path}")
 
         return FileResponse(
             path=str(out_path),
@@ -114,7 +120,7 @@ def baixar_sped(versao_id: int, db: Session = Depends(get_db)):
         )
 
     except Exception as e:
-        # ... (seu tratamento de erro permanece o mesmo)
+
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 

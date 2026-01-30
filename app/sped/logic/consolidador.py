@@ -2,11 +2,10 @@ from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
 from app.db.models.efd_versao import EfdVersao
 from app.db.models.ref_models import RefCstPisCofins, RefCfop
-from app.sped.c170_utils import _parse_linha_sped_to_reg_dados, _parse_sped_float
+from app.sped.blocoC.c170_utils import _parse_linha_sped_to_reg_dados, _parse_sped_float
 from typing import Any, Dict, Optional, List, Tuple
 from sqlalchemy.orm import Session
 from decimal import Decimal
-from app.sped.formatter import formatar_linha
 from app.sped.revisao_overlay import LinhaLogica
 from sqlalchemy import func
 import re

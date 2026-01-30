@@ -13,10 +13,8 @@ from app.fiscal.varredura import executar_varredura
 from app.fiscal.regras.achado import Achado
 from app.fiscal.scanners.exportacao import montar_meta_fiscal
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
-from app.sped.c170_utils import linhas_para_rows_like
+from app.sped.blocoC.c170_utils import linhas_para_rows_like
 import logging
-
-from app.sped.logic.consolidador import eh_pf_por_c100
 
 logger = logging.getLogger(__name__)
 
