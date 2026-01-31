@@ -25,7 +25,11 @@ def listar_c170(
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     somente_alterados: bool = Query(default=False),
-    ocultar_pf: bool = Query(default=True),  # <-- NOVO
+    ocultar_pf: bool = Query(default=True),
+
+    # ✅ filtros do front
+    cfop: Optional[str] = Query(default=None),
+    cst_pis: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
 
     c170 = aliased(EfdRegistro)
@@ -38,31 +42,54 @@ def listar_c170(
         .filter(c170.reg == "C170")
     )
 
+    # ✅ filtros no SQL antes do limit/count
+    cfop_f = (cfop or "").strip()
+    cst_f = (cst_pis or "").strip()
+
+    if cfop_f:
+        cfop_json = func.trim(func.JSON_UNQUOTE(func.JSON_EXTRACT(c170.conteudo_json, "$.dados[9]")))
+        q = q.filter(cfop_json == cfop_f)
+
+    if cst_f:
+        cst_json = func.trim(func.JSON_UNQUOTE(func.JSON_EXTRACT(c170.conteudo_json, "$.dados[23]")))
+        q = q.filter(cst_json == cst_f)
+
     if somente_alterados:
         q = q.filter(c170.alterado.is_(True))
 
+    # ✅ join para classificar PF/PJ via 0150
+    q = q.join(
+        c100,
+        (c100.id == c170.pai_id)
+        & (c100.versao_id == c170.versao_id)
+        & (c100.reg == "C100"),
+    )
+
+    cod_part = func.trim(func.JSON_UNQUOTE(func.JSON_EXTRACT(c100.conteudo_json, "$.dados[2]")))
+    cod_0150 = func.trim(func.JSON_UNQUOTE(func.JSON_EXTRACT(p0150.conteudo_json, "$.dados[0]")))
+    cpf_0150 = func.trim(func.JSON_UNQUOTE(func.JSON_EXTRACT(p0150.conteudo_json, "$.dados[4]")))
+
+    q = q.join(
+        p0150,
+        (p0150.versao_id == c100.versao_id)
+        & (p0150.reg == "0150")
+        & (cod_0150 == cod_part),
+    )
+
+    # ✅ contadores PF/PJ (para UI)
+    total_pf = (
+        q.filter(cpf_0150.isnot(None))
+         .filter(cpf_0150 != "")
+         .count()
+    )
+    total_pj = (
+        q.filter(or_(cpf_0150.is_(None), cpf_0150 == ""))
+         .count()
+    )
+
+    # ✅ aplicar ocultar_pf (default True)
     if ocultar_pf:
-        # join no pai (C100)
-        q = q.join(
-            c100,
-            (c100.id == c170.pai_id) & (c100.versao_id == c170.versao_id) & (c100.reg == "C100"),
-        )
-
-        # join no participante (0150) via COD_PART do C100 (dados[2])
-        cod_part = func.JSON_UNQUOTE(func.JSON_EXTRACT(c100.conteudo_json, "$.dados[2]"))
-
-        cod_0150 = func.JSON_UNQUOTE(func.JSON_EXTRACT(p0150.conteudo_json, "$.dados[0]"))
-        cpf_0150 = func.JSON_UNQUOTE(func.JSON_EXTRACT(p0150.conteudo_json, "$.dados[2]"))
-
-        q = q.join(
-            p0150,
-            (p0150.versao_id == c100.versao_id)
-            & (p0150.reg == "0150")
-            & (cod_0150 == cod_part),
-        )
-
-        # filtra PF: CPF preenchido
-        q = q.filter(cpf_0150.isnot(None)).filter(cpf_0150 != "")
+        q = q.filter(or_(cpf_0150.is_(None), cpf_0150 == ""))
 
     total = q.count()
 
@@ -78,7 +105,6 @@ def listar_c170(
         cj = getattr(r, "conteudo_json", None) or {}
         dados_raw = cj.get("dados") or []
 
-        # normaliza: sempre devolver lista "reta" (campos sem REG)
         if isinstance(dados_raw, list):
             if (
                 len(dados_raw) == 2
@@ -100,32 +126,11 @@ def listar_c170(
             "dados": dados,
         })
 
-    # ✅ DEBUG antes overlay (primeiro item da página)
-    if items:
-        it0 = items[0]
-        d0 = it0.get("dados", []) or []
-        print(
-            f"DEBUG antes overlay | versao={versao_id} primeiro_registro_id={it0.get('registro_id')} "
-            f"cst_pis={d0[23] if len(d0)>23 else None} "
-            f"cst_cof={d0[29] if len(d0)>29 else None}"
-        )
-
-    # ✅ overlay uma vez (fora do loop)
     try:
         items, aplicadas = aplicar_overlay_revisoes_c170(db, versao_id=int(versao_id), items=items)
     except Exception as e:
         print("ERRO overlay C170:", repr(e))
         aplicadas = 0
-
-    # ✅ DEBUG depois overlay
-    if items:
-        it0 = items[0]
-        d0 = it0.get("dados", []) or []
-        print(
-            f"DEBUG depois overlay | versao={versao_id} primeiro_registro_id={it0.get('registro_id')} "
-            f"cst_pis={d0[23] if len(d0)>23 else None} "
-            f"cst_cof={d0[29] if len(d0)>29 else None}"
-        )
 
     return {
         "items": items,
@@ -133,6 +138,13 @@ def listar_c170(
         "limit": int(limit),
         "offset": int(offset),
         "overlay_revisoes_aplicadas": int(aplicadas),
+
+        # ✅ extra para UI
+        "totais_pf_pj": {
+            "pf_cpf": int(total_pf),
+            "pj_cnpj": int(total_pj),
+            "total_bruto": int(total_pf + total_pj),
+        }
     }
 
 
@@ -261,7 +273,9 @@ def post_revisar_c170_global(
         )
 
         if resultado.get("status") == "vazio":
-            raise HTTPException(status_code=404, detail=resultado["mensagem"])
+            msg = resultado.get("mensagem") or resultado.get(
+                "message") or "Nenhum registro encontrado para os filtros informados."
+            raise HTTPException(status_code=404, detail=msg)
 
         return resultado
 

@@ -72,3 +72,4 @@ class RevisaoGlobalSchema(BaseModel):
     filtros_origem: Dict[str, Optional[str]]
     valores_novos: Dict[str, Optional[str]]
     apontamento_id: Optional[int] = None
+    limit_preview: int = 100

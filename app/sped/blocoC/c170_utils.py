@@ -11,6 +11,8 @@ _RE_CST = re.compile(r"^\d{2}$")
 
 # --- Funções Auxiliares de Cálculo e Formatação ---
 
+
+
 def _get_dados_list(dados: Any) -> List[Any]:
     if dados is None:
         return []

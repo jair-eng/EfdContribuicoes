@@ -247,6 +247,3 @@ def _parse_money_br(s: str) -> float:
         return float(s)
     except Exception:
         return 0.0  # fallback seguro
-
-
-
