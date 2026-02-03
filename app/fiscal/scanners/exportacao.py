@@ -1,22 +1,27 @@
-from typing import Sequence, List, Dict, Any, Optional
+from typing import Sequence, List, Dict, Any, Optional, Tuple
 from app.db.models import EfdRegistro
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal
-from typing import Sequence, Tuple
+
 
 
 
 
 def _dec_br(v) -> Decimal:
-    try:
-        s = str(v or "").strip()
-        if not s:
-            return Decimal("0")
-        # aceita "1.234,56" e "1234.56"
+    s = str(v or "").strip()
+    if not s:
+        return Decimal("0")
+
+    # se tiver vírgula, é pt-BR: 1.234,56
+    if "," in s:
         s = s.replace(".", "").replace(",", ".")
+    # se não tiver vírgula, assume padrão: 1234.56 (não remove ponto)
+
+    try:
         return Decimal(s)
     except Exception:
         return Decimal("0")
+
 
 def coletar_flags_bloco_m(registros_db: Sequence["EfdRegistro"]) -> Dict[str, Any]:
     """
@@ -55,6 +60,52 @@ def coletar_flags_bloco_m(registros_db: Sequence["EfdRegistro"]) -> Dict[str, An
         "soma_valores_bloco_m": str(soma),
         # "zerado" só faz sentido se o bloco existir
         "bloco_m_zerado": bool(tem_apuracao_m and soma == Decimal("0")),
+    }
+
+def coletar_creditos_bloco_m(registros_db):
+    """
+    Heurística segura para coletar créditos apurados:
+      - PIS: M100 (VL_CRED) e/ou M200 (VL_TOT_CONT_NC)
+      - COFINS: M500 (VL_CRED) e/ou M600 (VL_TOT_CONT_NC)
+    Retorna strings pra não quebrar JSON/meta.
+    """
+    cred_pis = Decimal("0")
+    cred_cof = Decimal("0")
+
+    def pick_max(dados, idxs):
+        best = Decimal("0")
+        for idx in idxs:
+            if 0 <= idx < len(dados):
+                v = _dec_br(dados[idx])
+                if v > best:
+                    best = v
+        return best
+
+    for r in registros_db:
+        reg = (r.reg or "").strip()
+        dados = (r.conteudo_json or {}).get("dados") or []
+
+        # -------- PIS --------
+        if reg == "M100":
+            # índices comuns onde aparece VL_CRED no M100 (varia por leiaute),
+            # mas geralmente fica perto do meio/final.
+            # Tentamos alguns candidatos sem explodir.
+            cred_pis = max(cred_pis, pick_max(dados, [7, 11, 14]))
+
+        elif reg == "M200":
+            # M200 normalmente começa com o total do período e repete no final
+            cred_pis = max(cred_pis, pick_max(dados, [0, len(dados) - 1]))
+
+        # -------- COFINS --------
+        elif reg == "M500":
+            cred_cof = max(cred_cof, pick_max(dados, [7, 11, 14]))
+
+        elif reg == "M600":
+            cred_cof = max(cred_cof, pick_max(dados, [0, len(dados) - 1]))
+
+    return {
+        "credito_pis": str(cred_pis),
+        "credito_cofins": str(cred_cof),
     }
 
 def detectar_perfil_monofasico(registros_db: Sequence["EfdRegistro"]) -> Tuple[bool, int]:
@@ -253,51 +304,7 @@ def montar_c170_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         linha=int(anchor.linha),
         dados=dados_final,
     )
-def coletar_creditos_bloco_m(registros_db):
-    """
-    Heurística segura para coletar créditos apurados:
-      - PIS: M100 (VL_CRED) e/ou M200 (VL_TOT_CONT_NC)
-      - COFINS: M500 (VL_CRED) e/ou M600 (VL_TOT_CONT_NC)
-    Retorna strings pra não quebrar JSON/meta.
-    """
-    cred_pis = Decimal("0")
-    cred_cof = Decimal("0")
 
-    def pick_max(dados, idxs):
-        best = Decimal("0")
-        for idx in idxs:
-            if 0 <= idx < len(dados):
-                v = _dec_br(dados[idx])
-                if v > best:
-                    best = v
-        return best
-
-    for r in registros_db:
-        reg = (r.reg or "").strip()
-        dados = (r.conteudo_json or {}).get("dados") or []
-
-        # -------- PIS --------
-        if reg == "M100":
-            # índices comuns onde aparece VL_CRED no M100 (varia por leiaute),
-            # mas geralmente fica perto do meio/final.
-            # Tentamos alguns candidatos sem explodir.
-            cred_pis = max(cred_pis, pick_max(dados, [7, 11, 14]))
-
-        elif reg == "M200":
-            # M200 normalmente começa com o total do período e repete no final
-            cred_pis = max(cred_pis, pick_max(dados, [0, len(dados) - 1]))
-
-        # -------- COFINS --------
-        elif reg == "M500":
-            cred_cof = max(cred_cof, pick_max(dados, [7, 11, 14]))
-
-        elif reg == "M600":
-            cred_cof = max(cred_cof, pick_max(dados, [0, len(dados) - 1]))
-
-    return {
-        "credito_pis": str(cred_pis),
-        "credito_cofins": str(cred_cof),
-    }
 def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
     flags: Dict[str, Any] = {

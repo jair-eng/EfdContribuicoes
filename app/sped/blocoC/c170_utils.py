@@ -302,3 +302,38 @@ def somar_creditos_c170(
         "filtro_cfop": cfop_norm,
         "somente_cst_51": somente_cst_51,
     }
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def _normalizar_linha_sped(linha: str) -> str:
+    s = (linha or "").strip()
+    if not s:
+        return ""
+    if not s.startswith("|"):
+        s = "|" + s
+    if not s.endswith("|"):
+        s = s + "|"
+    return s
+
+
+def _validar_linha_c170(linha: str) -> str:
+    """
+    Valida e normaliza uma linha SPED C170 no formato pipe.
+    Levanta ValueError se inválida.
+    """
+    s = _normalizar_linha_sped(linha)
+    if not s:
+        raise ValueError("linha_nova vazia após formatação")
+
+    # precisa conter o token exato do registro
+    if "|C170|" not in s:
+        raise ValueError("linha_nova inválida: não contém |C170|")
+
+    # validação mínima: deve ter ao menos reg + 1 campo
+    partes = s.split("|")
+    # Ex: ["", "C170", "campo1", ... , ""]
+    if len(partes) < 4 or (partes[1] or "").strip() != "C170":
+        raise ValueError("linha_nova inválida: estrutura C170 inesperada")
+
+    return s

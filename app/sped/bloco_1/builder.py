@@ -1,6 +1,6 @@
 from __future__ import annotations
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 from sqlalchemy.orm import Session
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
 from app.sped.blocoM.m_utils import _clean_sped_line, _reg_of_line, _d
@@ -8,7 +8,7 @@ from app.sped.bloco_1.reg1100 import linha_1100
 from app.sped.logic.consolidador import obter_conteudo_final
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Iterable
+from typing import Optional
 import re
 
 

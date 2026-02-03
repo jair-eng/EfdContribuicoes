@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict, Any, Optional, Tuple
 from app.sped.logic.consolidador import _reg_of
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+
 
 
 def _trunc_2(v: Decimal) -> Decimal:
@@ -137,3 +140,87 @@ def caminho_sped_corrigido(nome_arquivo: str) -> str:
 
 def nome_sped_corrigido(arquivo, versao) -> str:
     return f"EFD_{arquivo.periodo}_VERSAO_{versao.id}_CORRIGIDO.txt"
+
+def _fields(line: str) -> List[str]:
+    s = _clean_sped_line(line)
+    parts = s.strip("|").split("|")
+    # parts[0] = REG
+    return parts[1:] if len(parts) > 1 else []
+
+def _key_m(line: str) -> Tuple[str, Tuple[str, ...]]:
+    """
+    Chave lógica por registro para deduplicar.
+    Ajustada pro que mais duplica: M105/M505.
+    """
+    reg = _reg_of_line(line)
+
+    d = _fields(line)
+
+    if reg == "M105":
+        # |M105|NAT_BC|CST|VL_BC|...|
+        nat_bc = d[0] if len(d) > 0 else ""
+        cst = d[1] if len(d) > 1 else ""
+        return (reg, (nat_bc, cst))
+
+    if reg == "M505":
+        # |M505|NAT_BC|CST|VL_BC|...|
+        nat_bc = d[0] if len(d) > 0 else ""
+        cst = d[1] if len(d) > 1 else ""
+        return (reg, (nat_bc, cst))
+
+    if reg in ("M400", "M410", "M800", "M810"):
+        # dedupe por (CST, COD_CT?, VL_REC?) -> aqui dá pra usar linha inteira (mais seguro)
+        return (reg, tuple([_clean_sped_line(line)]))
+
+    # default: dedupe por linha inteira
+    return (reg, tuple([_clean_sped_line(line)]))
+
+def sanitizar_bloco_m(bloco_m: List[str]) -> List[str]:
+    """
+    Mantém somente um bloco M consistente e sem duplicidades.
+    Sempre reconta M990.
+    """
+    if not bloco_m:
+        return ["|M001|0|", "|M990|2|"]
+
+    # limpa e filtra só M*
+    cleaned = []
+    for ln in bloco_m:
+        ln = _clean_sped_line(ln)
+        if not ln:
+            continue
+        reg = _reg_of_line(ln)
+        if not reg or not reg.startswith("M"):
+            continue
+        if reg in ("M001", "M990"):
+            continue
+        cleaned.append(ln)
+
+    # dedupe: última ocorrência vence
+    last_by_key: Dict[Tuple[str, Tuple[str, ...]], str] = {}
+    order: List[Tuple[str, Tuple[str, ...]]] = []
+
+    for ln in cleaned:
+        k = _key_m(ln)
+        if k not in last_by_key:
+            order.append(k)
+        last_by_key[k] = ln
+
+    # remonta na ordem de aparição (mas com o último valor)
+    body = [last_by_key[k] for k in order]
+
+    out = ["|M001|0|"]
+    out.extend(body)
+    out.append(f"|M990|{len(out) + 1}|")
+    return out
+
+def _to_dec(v: str) -> Decimal:
+    """Converte '1.234,56' ou '1234,56' em Decimal."""
+    s = (v or "").strip()
+    if not s:
+        return Decimal("0.00")
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0.00")

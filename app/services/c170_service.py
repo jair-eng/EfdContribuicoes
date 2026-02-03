@@ -5,7 +5,7 @@ from sqlalchemy import func
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
 from app.sped.blocoC.c100_utils import patch_c100_totais_imposto, salvar_revisao_c100_automatica
-from app.sped.blocoC.c170_utils import patch_c170_campos
+from app.sped.blocoC.c170_utils import patch_c170_campos, _validar_linha_c170
 from app.sped.formatter import formatar_linha
 from app.sped.logic.consolidador import (
     _get_dados,
@@ -30,7 +30,6 @@ def revisar_c170(
     Blindado contra registros com poucos campos (IndexError).
     """
 
-
     cfop = norm(cfop)
     cst_pis = norm(cst_pis)
     cst_cofins = norm(cst_cofins)
@@ -50,13 +49,12 @@ def revisar_c170(
 
     dados_originais = _get_dados(r) or []
 
-    # 2) Blindagem: muitos C170 vêm com menos campos -> patch pode estourar índice
-    # índices que você usa/mostrou:
+    # 2) Blindagem: garante tamanho mínimo para índices usados
     # CFOP (9), CST_PIS (23), CST_COFINS (29)
     for idx in (9, 23, 29):
         ensure_len(dados_originais, idx)
 
-    # 3) Aplica patch (agora com tamanho garantido)
+    # 3) Aplica patch
     novos_campos = patch_c170_campos(
         dados_originais,
         cfop=cfop,
@@ -64,12 +62,13 @@ def revisar_c170(
         cst_cofins=cst_cofins,
     )
 
-    # blindagem extra: se patch devolveu lista curta, garante também
+    # blindagem extra
     for idx in (9, 23, 29):
         ensure_len(novos_campos, idx)
 
-    # 4) Formata linha nova
+    # 4) Formata linha nova + valida
     linha_nova = formatar_linha("C170", novos_campos).strip()
+    linha_nova = _validar_linha_c170(linha_nova)
 
     payload_rev = {
         "linha_referencia": int(getattr(r, "linha", 0)),
@@ -85,10 +84,10 @@ def revisar_c170(
         },
     }
 
-    # 5) Persistência da revisão (apaga só as PENDENTES, não as materializadas)
+    # 5) Persistência (apaga só PENDENTES da mesma linha/registro)
     db.query(EfdRevisao).filter(
         EfdRevisao.versao_origem_id == int(versao_origem_id),
-        EfdRevisao.versao_revisada_id.is_(None),  # <<< MUITO IMPORTANTE
+        EfdRevisao.versao_revisada_id.is_(None),
         EfdRevisao.registro_id == int(r.id),
         EfdRevisao.reg == "C170",
         EfdRevisao.acao == "REPLACE_LINE",
@@ -97,7 +96,7 @@ def revisar_c170(
     db.add(
         EfdRevisao(
             versao_origem_id=int(versao_origem_id),
-            versao_revisada_id=None,              # <<< explícito
+            versao_revisada_id=None,
             registro_id=int(r.id),
             reg="C170",
             acao="REPLACE_LINE",
@@ -111,6 +110,9 @@ def revisar_c170(
     return {"status": "alterado", "registro_id": int(r.id)}
 
 
+# =====================================================================
+# Revisão em lote C170 (+ consolidação C100)
+# =====================================================================
 def revisar_c170_lote(
     db: Session,
     *,
@@ -123,39 +125,43 @@ def revisar_c170_lote(
     Executa a revisão em lote dos registros C170 e consolida os totais nos pais (C100).
     Implementa contagem de registros ignorados por trava de CPF.
     """
-
     import traceback
 
-    resultados = []
+    resultados: List[Dict[str, Any]] = []
     c100_afetados = set()
 
     total_alterado = 0
     total_ignorado_pf = 0
     total_erros = 0
-    erros_detalhe = []  # top 10
+    erros_detalhe: List[Dict[str, Any]] = []  # top 10
 
+    # Garante hierarquia pai_id populada
     popular_pai_id(db, versao_origem_id)
 
     for item in alteracoes:
         reg_id = item.get("registro_id")
         try:
+            # --- validação defensiva do input ---
+            if reg_id is None:
+                raise ValueError("Item sem registro_id")
+
             reg_db = db.get(EfdRegistro, int(reg_id))
             if not reg_db:
-                total_erros += 1
-                msg = "Registro não encontrado no banco"
-                resultados.append({"error": msg, "registro_id": reg_id})
-                if len(erros_detalhe) < 10:
-                    erros_detalhe.append({"registro_id": reg_id, "erro": msg})
-                continue
+                raise ValueError("Registro não encontrado no banco")
 
-            # 🛡️ TRAVA PF: chame a função com a assinatura correta
+            # ✅ valida versão + tipo de registro cedo (evita ruído)
+            if int(reg_db.versao_id) != int(versao_origem_id):
+                raise ValueError("Registro não pertence à versão informada")
+            if (reg_db.reg or "").strip().upper() != "C170":
+                raise ValueError("Registro_id não é C170")
+
+            # 🛡️ TRAVA PF
             if reg_db.pai_id:
                 is_pf = eh_pf_por_c100(
                     db,
                     versao_id=int(versao_origem_id),
-                    registro_id=int(reg_db.id),  # <<< AQUI é o fix
+                    registro_id=int(reg_db.id),
                 )
-
                 if is_pf:
                     total_ignorado_pf += 1
                     resultados.append({
@@ -166,7 +172,7 @@ def revisar_c170_lote(
                     })
                     continue
 
-            # ✅ SE CHEGOU AQUI, VAI PROCESSAR
+            # ✅ processa revisão
             res = revisar_c170(
                 db,
                 registro_id=int(reg_db.id),
@@ -175,7 +181,7 @@ def revisar_c170_lote(
                 cst_pis=item.get("cst_pis"),
                 cst_cofins=item.get("cst_cofins"),
                 motivo_codigo=motivo_codigo,
-                apontamento_id=apontamento_id
+                apontamento_id=apontamento_id,
             )
 
             resultados.append(res)
@@ -190,7 +196,7 @@ def revisar_c170_lote(
             err = str(e)
             resultados.append({"error": err, "registro_id": reg_id})
 
-            # log detalhado (muito importante agora)
+            # log detalhado
             print("❌ ERRO LOTE registro_id=", reg_id, "err=", err)
             print(traceback.format_exc())
 
@@ -235,13 +241,15 @@ def revisar_c170_lote(
         "total_alterado": total_alterado,
         "total_ignorado_pf": total_ignorado_pf,
         "total_erros": total_erros,
-        "erros_detalhe": erros_detalhe,   # <<< pra você ver o motivo real
+        "erros_detalhe": erros_detalhe,
         "detalhes": resultados,
     }
 
 
 
-
+# =====================================================================
+# Revisão global (por filtros origem) -> monta lote e executa
+# =====================================================================
 def revisar_c170_global(
     db: Session,
     *,
@@ -254,7 +262,7 @@ def revisar_c170_global(
     # 1) Garante hierarquia (pai_id)
     popular_pai_id(db, versao_origem_id)
 
-    # 2) Query base
+    # 2) Query base (ATENÇÃO: filtra origem SEM overlay pendente)
     query = (
         db.query(EfdRegistro)
         .filter(
@@ -263,14 +271,10 @@ def revisar_c170_global(
         )
     )
 
-    # --- filtros (backend deve aceitar str)
-    cfop_f = (filtros_origem.get("cfop") or "")
-    cst_pis_f = (filtros_origem.get("cst_pis") or "")
+    cfop_f = str(filtros_origem.get("cfop") or "").strip()
+    cst_pis_f = str(filtros_origem.get("cst_pis") or "").strip()
 
-    cfop_f = str(cfop_f).strip() if cfop_f is not None else ""
-    cst_pis_f = str(cst_pis_f).strip() if cst_pis_f is not None else ""
-
-    # ATENÇÃO: isso assume que seu JSON é {"dados":[...]} e que CFOP é dados[9], CST_PIS dados[23]
+    # JSON: CFOP = dados[9], CST_PIS = dados[23]
     if cfop_f:
         query = query.filter(
             func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[9]")) == cfop_f
@@ -285,45 +289,47 @@ def revisar_c170_global(
     if not registros:
         return {
             "status": "vazio",
+            "escopo_filtro": "origem_sem_overlay",
             "candidatos": 0,
             "total_alterado": 0,
             "total_ignorado_pf": 0,
-            "erros": 0,
+            "total_erros": 0,
         }
 
-    # 3) Monta lote
-    novo_cfop = (valores_novos.get("cfop") or None)
-    novo_pis = (valores_novos.get("cst_pis") or None)
-    novo_cof = (valores_novos.get("cst_cofins") or None)
+    # 3) Monta lote com novos valores (None => não altera aquele campo)
+    novo_cfop = valores_novos.get("cfop") if valores_novos.get("cfop") not in ("", None) else None
+    novo_pis = valores_novos.get("cst_pis") if valores_novos.get("cst_pis") not in ("", None) else None
+    novo_cof = valores_novos.get("cst_cofins") if valores_novos.get("cst_cofins") not in ("", None) else None
 
-    lote = []
+    lote: List[Dict[str, Any]] = []
     for r in registros:
         lote.append({
             "registro_id": int(r.id),
-            "cfop": str(novo_cfop).strip() if novo_cfop not in (None, "") else None,
-            "cst_pis": str(novo_pis).strip() if novo_pis not in (None, "") else None,
-            "cst_cofins": str(novo_cof).strip() if novo_cof not in (None, "") else None,
+            "cfop": str(novo_cfop).strip() if novo_cfop is not None else None,
+            "cst_pis": str(novo_pis).strip() if novo_pis is not None else None,
+            "cst_cofins": str(novo_cof).strip() if novo_cof is not None else None,
         })
 
-    # 4) Executa lote (a verdade está aqui)
+    # 4) Executa lote
     res_lote = revisar_c170_lote(
         db,
         versao_origem_id=int(versao_origem_id),
         alteracoes=lote,
         motivo_codigo=motivo_codigo,
+        apontamento_id=apontamento_id,
     )
 
-    # 5) Retorna contadores reais (NÃO len(registros))
-    # Ajuste os nomes conforme o que seu revisar_c170_lote retorna
-    alterados = int(res_lote.get("alterados") or res_lote.get("total_alterado") or 0)
-    ignorados_pf = int(res_lote.get("ignorados_pf") or res_lote.get("total_ignorado_pf") or 0)
-    erros = int(res_lote.get("erros") or 0)
+    # 5) Retorna contadores reais (nomes consistentes)
+    alterados = int(res_lote.get("total_alterado") or 0)
+    ignorados_pf = int(res_lote.get("total_ignorado_pf") or 0)
+    erros = int(res_lote.get("total_erros") or 0)
 
     return {
         "status": "ok",
+        "escopo_filtro": "origem_sem_overlay",
         "candidatos": len(registros),
         "total_alterado": alterados,
         "total_ignorado_pf": ignorados_pf,
-        "erros": erros,
+        "total_erros": erros,
         "detalhes": res_lote,
     }

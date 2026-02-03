@@ -9,7 +9,7 @@ import traceback
 # ########## DEBUG ##########
 # Troque para False quando terminar
 # =========================================================
-DEBUG = True
+DEBUG = False
 
 
 def _d(title: str, obj):

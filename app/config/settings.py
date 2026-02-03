@@ -1,6 +1,6 @@
 import os
 from decimal import Decimal
-import logging
+
 
 DB_USER = os.getenv("DB_USER", "sped_user")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "Jcbn2025#")
@@ -17,7 +17,4 @@ ALIQUOTA_PIS_PCT = Decimal("1.65")
 ALIQUOTA_COFINS_PCT = Decimal("7.60")
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+

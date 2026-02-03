@@ -1,12 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any,Optional
 from collections import defaultdict
-from app.sped.blocoM.m_utils import _fmt_br, _d, _cst2
-
-# CSTs que obrigam M400/M800 (receita CST 04/06/07/08/09)
-CSTS_RECEITA_M = {"04", "06", "07", "08", "09"}
+from app.db.models import EfdRevisao
+from app.sped.blocoM.m_utils import _fmt_br, _d, _cst2, _clean_sped_line, _reg_of_line, _to_dec
+from sqlalchemy.orm import Session
+from app.fiscal.settings_fiscais import CSTS_RECEITA_M
 
 
 
@@ -15,24 +15,13 @@ class ReceitaKey:
     cst: str
     conta: str  # pode ser vazia, mas preferimos manter
 
-def extrair_receitas_cst(
-    linhas_sped: List[str],
-    *,
-    preferir_c190: bool = True,
-) -> Dict[ReceitaKey, Decimal]:
-    """
-    Retorna somatório de receita por (CST, conta) para CST 04/06/07/08/09.
-    Tenta C190 e cai para C170 quando não encontrar C190 utilizável.
-    """
-
-    # 1) tenta C190
+def extrair_receitas_cst(parsed: List[Dict[str, Any]], *, preferir_c190: bool=True) -> Dict[Tuple[str,str], Decimal]:
     if preferir_c190:
-        rec = extrair_receitas_c190(linhas_sped)
-        if rec:  # se achou algo útil, usa
+        rec = extrair_receitas_c190(parsed)
+        if rec:
             return rec
+    return extrair_receitas_c170(parsed)
 
-    # 2) fallback C170
-    return extrair_receitas_c170(linhas_sped)
 
 
 def extrair_receitas_c190(parsed: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Decimal]:
@@ -150,3 +139,148 @@ def gerar_m_receitas(receitas: Dict[Tuple[str, str], Decimal]) -> List[str]:
         out.append(f"|M800|{cst}|{_fmt_br(valor)}|{conta_str}||")
         out.append(f"|M810|999|{_fmt_br(valor)}|{conta_str}||")
     return out
+
+
+def _split_m_receitas(m_lines: List[str]) -> Tuple[List[str], List[str]]:
+    """Separa linhas M400/M410 e M800/M810."""
+    m400 = []
+    m800 = []
+    for l in m_lines or []:
+        reg = _reg_of_line(l)
+        if reg in {"M400", "M410"}:
+            m400.append(l)
+        elif reg in {"M800", "M810"}:
+            m800.append(l)
+    return m400, m800
+
+
+def _garantir_filhos_m400(m400_410: List[str]) -> List[str]:
+    """
+    Garante que todo M400 tenha ao menos um M410 filho
+    e que a soma dos VL_REC dos M410 bata com o VL_TOT_REC do M400.
+    Estratégia segura:
+      - Agrupa por (COD_NAT_REC, CTA_CONT) do M400 (campos 2 e 4 normalmente).
+      - Se não houver M410, cria um M410 com COD_CTA="999" e VL_REC=VL_TOT_REC.
+      - Se houver M410 mas soma diferente, ajusta o PRIMEIRO M410 para fechar diferença.
+    """
+    out: List[str] = []
+    cur_m400 = None
+    filhos: List[str] = []
+
+    def flush():
+        nonlocal cur_m400, filhos, out
+        if not cur_m400:
+            return
+
+        parts400 = cur_m400.split("|")
+        # parts: ["", "M400", COD_NAT_REC, VL_TOT_REC, CTA_CONT, "", ""]
+        vl_tot = _to_dec(parts400[3]) if len(parts400) > 3 else Decimal("0.00")
+
+        m410_parts = [f.split("|") for f in filhos]
+        soma = Decimal("0.00")
+        for p in m410_parts:
+            # ["", "M410", COD_CTA, VL_REC, CTA_CONT, "", ""]
+            if len(p) > 3:
+                soma += _to_dec(p[3])
+        soma = soma.quantize(Decimal("0.01"))
+        vl_tot = vl_tot.quantize(Decimal("0.01"))
+
+        if not filhos:
+            # cria filho obrigatório
+            # mantem CTA_CONT do M400 no campo 4 do M410
+            cta_cont = parts400[4] if len(parts400) > 4 else ""
+            m410 = _clean_sped_line(f"|M410|999|{_fmt_br(vl_tot)}|{cta_cont}||")
+            filhos = [m410]
+        else:
+            if soma != vl_tot:
+                # ajusta o primeiro M410 para fechar a diferença
+                diff = (vl_tot - soma).quantize(Decimal("0.01"))
+                p0 = m410_parts[0]
+                # campo VL_REC é o 3 (index 3)
+                vl0 = _to_dec(p0[3]) if len(p0) > 3 else Decimal("0.00")
+                novo = (vl0 + diff).quantize(Decimal("0.01"))
+                p0[3] = _fmt_br(novo)
+                filhos[0] = _clean_sped_line("|" + "|".join(p0[1:]) + "|")
+
+        out.append(_clean_sped_line(cur_m400))
+        for f in filhos:
+            out.append(_clean_sped_line(f))
+
+        cur_m400 = None
+        filhos = []
+
+    for ln in (m400_410 or []):
+        ln = _clean_sped_line(ln)
+        if not ln:
+            continue
+        reg = _reg_of_line(ln)
+        if reg == "M400":
+            flush()
+            cur_m400 = ln
+            filhos = []
+        elif reg == "M410":
+            filhos.append(ln)
+
+    flush()
+    return [x for x in out if x]
+
+
+def _garantir_filhos_m800(m800_810: List[str]) -> List[str]:
+    """Mesma lógica de M400/M410, só que para M800/M810."""
+    out: List[str] = []
+    cur_m800 = None
+    filhos: List[str] = []
+
+    def flush():
+        nonlocal cur_m800, filhos, out
+        if not cur_m800:
+            return
+
+        parts800 = cur_m800.split("|")
+        # ["", "M800", COD_NAT_REC, VL_TOT_REC, CTA_CONT, "", ""]
+        vl_tot = _to_dec(parts800[3]) if len(parts800) > 3 else Decimal("0.00")
+
+        m810_parts = [f.split("|") for f in filhos]
+        soma = Decimal("0.00")
+        for p in m810_parts:
+            # ["", "M810", COD_CTA, VL_REC, CTA_CONT, "", ""]
+            if len(p) > 3:
+                soma += _to_dec(p[3])
+        soma = soma.quantize(Decimal("0.01"))
+        vl_tot = vl_tot.quantize(Decimal("0.01"))
+
+        if not filhos:
+            cta_cont = parts800[4] if len(parts800) > 4 else ""
+            m810 = _clean_sped_line(f"|M810|999|{_fmt_br(vl_tot)}|{cta_cont}||")
+            filhos = [m810]
+        else:
+            if soma != vl_tot:
+                diff = (vl_tot - soma).quantize(Decimal("0.01"))
+                p0 = m810_parts[0]
+                vl0 = _to_dec(p0[3]) if len(p0) > 3 else Decimal("0.00")
+                novo = (vl0 + diff).quantize(Decimal("0.01"))
+                p0[3] = _fmt_br(novo)
+                filhos[0] = _clean_sped_line("|" + "|".join(p0[1:]) + "|")
+
+        out.append(_clean_sped_line(cur_m800))
+        for f in filhos:
+            out.append(_clean_sped_line(f))
+
+        cur_m800 = None
+        filhos = []
+
+    for ln in (m800_810 or []):
+        ln = _clean_sped_line(ln)
+        if not ln:
+            continue
+        reg = _reg_of_line(ln)
+        if reg == "M800":
+            flush()
+            cur_m800 = ln
+            filhos = []
+        elif reg == "M810":
+            filhos.append(ln)
+
+    flush()
+    return [x for x in out if x]
+

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict
-
 from app.sped.bloco_9.bloco9 import calcular_bloco9
 from app.sped.blocoM.blocoM import calcular_blocoM
 from app.sped.logic.consolidador import obter_conteudo_final
@@ -15,6 +14,7 @@ from app.sped.blocoM.m_utils import (
 BLOCO9_REGS = {"9001", "9900", "9990", "9999"}
 
 print("🔥 ARQUIVO WRITER.PY CARREGADO PELO SISTEMA")
+
 
 
 def gerar_sped(
@@ -48,20 +48,34 @@ def gerar_sped(
     corpo_bloco_m: List[str] = []  # M* vindo do arquivo (fallback) quando não houver override
 
     for r in registros:
-        reg_obj = _reg_of_obj(r)
+        # --- suporta tanto EfdRegistro quanto str ---
+        if isinstance(r, str):
+            linha = _clean_sped_line(r)
+            if not linha:
+                continue
+            reg_line = _reg_of_line(linha)
+            if not reg_line or reg_line == "IGNORAR":
+                continue
+            reg_obj = reg_line
+        else:
+            reg_obj = _reg_of_obj(r)
 
-        # drop bloco 9 e marcadores que sempre recalculamos
-        if reg_obj in {"9001", "9900", "9990", "9999", "M001", "M990", "IGNORAR"}:
-            continue
+            # drop bloco 9 e marcadores que sempre recalculamos
+            if reg_obj in {"9001", "9900", "9990", "9999", "M001", "M990", "0990", "IGNORAR"}:
+                continue
 
-        # filtro PF (segurança)
-        if reg_obj == "C170" and getattr(r, "is_pf", False) is True:
-            continue
+            # filtro PF (segurança)
+            if reg_obj == "C170" and getattr(r, "is_pf", False) is True:
+                continue
 
-        linha = obter_conteudo_final(r)
-        linha = _clean_sped_line(linha)
-        if not linha:
-            continue
+            linha = obter_conteudo_final(r)
+            linha = _clean_sped_line(linha)
+            if not linha:
+                continue
+
+            reg_line = _reg_of_line(linha)
+            if not reg_line or reg_line == "IGNORAR":
+                continue
 
         # ✅ Se veio override, ignoramos QUALQUER M* que esteja nos registros
         if bloco_m_override is not None and reg_obj.startswith("M"):
@@ -72,14 +86,10 @@ def gerar_sped(
             corpo_bloco_m.append(linha)
             continue
 
-        # Caso geral: bucket pelo bloco baseado na LINHA (mais confiável aqui)
-        reg_line = _reg_of_line(linha)  # ex: "C100", "1001"
-        if not reg_line or reg_line == "IGNORAR":
-            continue
-
         bloco = reg_line[0].upper()
         if bloco in buckets:
             buckets[bloco].append(linha)
+
 
     # ✅ aplica override do bloco 1 UMA única vez (fora do loop)
     # (permite incluir 1100/1500/etc dentro do mesmo bloco_1_override)
@@ -133,3 +143,6 @@ def gerar_sped(
     with open(destino_arquivo, "w", encoding="iso-8859-1", errors="replace", newline="") as f:
         for linha in linhas_finais:
             f.write(linha + nl)
+
+
+
