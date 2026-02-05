@@ -5,6 +5,9 @@ from decimal import Decimal
 
 
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _dec_br(v) -> Decimal:
@@ -337,7 +340,12 @@ def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[Registro
     )
 
 def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+
+    # ---------------------------------------------------------
+    # 1) Identificação rápida dos registros presentes
+    # ---------------------------------------------------------
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
+
     flags = {
         "tem_1200": "1200" in regs_presentes,
         "tem_1210": "1210" in regs_presentes,
@@ -345,58 +353,96 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     }
     flags.update(coletar_flags_bloco_m(registros_db))
 
+    # ---------------------------------------------------------
+    # 2) Filtragem de C190
+    # ---------------------------------------------------------
     c190s = [r for r in registros_db if (r.reg or "").strip() == "C190"]
+
+    print(f"[C190_AGG] total C190 encontrados: {len(c190s)}")
+
     if not c190s:
         return None
 
     itens: List[Dict[str, Any]] = []
-    anchor = None
+    anchor_linha: Optional[int] = None
 
+    # ---------------------------------------------------------
+    # 3) Loop de agregação
+    # ---------------------------------------------------------
     for r in c190s:
+
         dados = (r.conteudo_json or {}).get("dados") or []
+
         if len(dados) < 4:
             continue
 
         cfop = str(dados[1] or "").strip()
 
-        # entradas: CFOP 1xxx/2xxx (compras)
-        if not (cfop.startswith("1") or cfop.startswith("2")):
+        # Entradas: 1xxx / 2xxx
+        if not (cfop and cfop[0] in ("1", "2")):
             continue
 
-        if anchor is None or int(r.id) < int(anchor.id):
-            anchor = r
+        vl_opr = dados[3]
+
+        linha_r = int(getattr(r, "linha", 0) or 0)
+
+        if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
+            anchor_linha = linha_r
 
         itens.append({
             "cst_icms": str(dados[0] or "").strip(),
             "cfop": cfop,
-            "vl_opr": dados[3],  # string br -> regra converte
-            "registro_id": r.id,
+            "vl_opr": vl_opr,
+            "registro_id": int(getattr(r, "id", 0) or 0),  # sintético
+            "linha": linha_r,
         })
 
-    if not itens or anchor is None:
+    print(f"[C190_AGG] itens válidos: {len(itens)} anchor_linha={anchor_linha}")
+
+    if not itens:
+        print("[C190_AGG] abortando (sem itens)")
         return None
 
+    if not anchor_linha:
+        print("[C190_AGG] abortando (sem anchor_linha)")
+        return None
+
+    # ---------------------------------------------------------
+    # 4) Atualização de indicadores de perfil
+    # ---------------------------------------------------------
     flags.update(coletar_creditos_bloco_m(registros_db))
+
     perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
     flags["perfil_monofasico"] = perfil_monofasico
     flags["score_monofasico"] = score_monofasico
     flags["fonte"] = "C190"
 
+    # Rastreabilidade
+    flags["anchor_reg_base"] = "C190"
+    flags["anchor_linha"] = anchor_linha
+    flags["anchor_registro_id"] = None
+
     dados_final: List[Any] = [{"_meta": flags}] + itens
 
+    # ---------------------------------------------------------
+    # 5) Retorno do DTO agregado
+    # ---------------------------------------------------------
     return RegistroFiscalDTO(
-        id=int(anchor.id),
+        id=0,  # agregado sintético
         reg="C190_IND_TORRADO_AGG",
-        linha=int(anchor.linha),
+        linha=anchor_linha,
         dados=dados_final,
     )
 
 
+
 def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
-    # 1. Identificação rápida dos registros presentes
+
+    # ---------------------------------------------------------
+    # 1) Identificação rápida dos registros presentes
+    # ---------------------------------------------------------
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
 
-    # 2. Coleta de Metadados (Flags)
     flags = {
         "tem_1200": "1200" in regs_presentes,
         "tem_1210": "1210" in regs_presentes,
@@ -404,57 +450,85 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     }
     flags.update(coletar_flags_bloco_m(registros_db))
 
-    # 3. Filtragem de C170
+    # ---------------------------------------------------------
+    # 2) Filtragem de C170
+    # ---------------------------------------------------------
     c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+
+    print(f"[C170_AGG] total C170 encontrados: {len(c170s)}")
+
     if not c170s:
         return None
 
     itens: List[Dict[str, Any]] = []
-    anchor: Optional[EfdRegistro] = None
+    anchor_linha: Optional[int] = None
 
+    # ---------------------------------------------------------
+    # 3) Loop de agregação
+    # ---------------------------------------------------------
     for r in c170s:
-        # Se o FiscalScanner já marcou o registro como PF, ele nem deveria estar no registros_db
-        # (se você passou o rows_limpas). Mas adicionamos segurança extra aqui.
 
         dados = (r.conteudo_json or {}).get("dados") or []
+
         if len(dados) < 10:
             continue
 
         cfop = str(dados[9] or "").strip()
-        # Filtro de entradas (1xxx e 2xxx)
-        if not (len(cfop) == 4 and cfop.isdigit() and (cfop.startswith("1") or cfop.startswith("2"))):
+
+        # Entradas: 1xxx / 2xxx
+        if not (cfop and cfop[0] in ("1", "2")):
             continue
 
         vl_item = dados[5] if len(dados) > 5 else "0"
 
-        if anchor is None or int(r.id) < int(anchor.id):
-            anchor = r
+        linha_r = int(getattr(r, "linha", 0) or 0)
 
-        # ✅ ADICIONADO: registro_id e pai_id para permitir que a regra valide PF
+        if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
+            anchor_linha = linha_r
+
         itens.append({
             "cfop": cfop,
             "vl_opr": vl_item,
-            "registro_id": int(r.id),
-            "pai_id": getattr(r, "pai_id", None)
+            "registro_id": int(getattr(r, "id", 0) or 0),  # pode ser 0 (agregado sintético)
+            "pai_id": getattr(r, "pai_id", None),
+            "linha": linha_r,  # útil para debug/rastreio
         })
 
-    if not itens or anchor is None:
+    print(f"[C170_AGG] itens válidos: {len(itens)} anchor_linha={anchor_linha}")
+
+    if not itens:
+        print("[C170_AGG] abortando (sem itens)")
         return None
 
-    # 4. Atualização de indicadores de perfil
+    if not anchor_linha:
+        print("[C170_AGG] abortando (sem anchor_linha)")
+        return None
+
+    # ---------------------------------------------------------
+    # 4) Atualização de indicadores de perfil
+    # ---------------------------------------------------------
     flags.update(coletar_creditos_bloco_m(registros_db))
+
     perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
     flags["perfil_monofasico"] = perfil_monofasico
     flags["score_monofasico"] = score_monofasico
     flags["fonte"] = "C170"
 
+    # Rastreabilidade
+    flags["anchor_reg_base"] = "C170"
+    flags["anchor_linha"] = anchor_linha
+    flags["anchor_registro_id"] = None  # ainda não temos id real
+
     dados_final: List[Any] = [{"_meta": flags}] + itens
 
+    # ---------------------------------------------------------
+    # 5) Retorno do DTO agregado
+    # ---------------------------------------------------------
     return RegistroFiscalDTO(
-        id=int(anchor.id),
+        id=0,  # agregado sintético
         reg="C170_IND_TORRADO_AGG",
-        linha=int(anchor.linha),
+        linha=anchor_linha,
         dados=dados_final,
-        # O DTO do agregador em si nunca é PF, pois ele é uma soma de vários registros.
         is_pf=False
     )
+

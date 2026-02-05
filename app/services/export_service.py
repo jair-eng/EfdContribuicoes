@@ -183,10 +183,6 @@ def exportar_sped(
             periodo_yyyymm=int(periodo_0000) if periodo_0000 else None,
         )
 
-        # debug, apagar depois
-        _dbg_0900("depois_aplicar", conteudo_sem_m)
-        # ----
-
         # 6) Bloco M: override do banco > fallback construir_bloco_m_v3
         override_db = buscar_override_bloco_m(
             db,
@@ -238,10 +234,7 @@ def exportar_sped(
             bloco_1_override = bloco_1_override[:-1]
         bloco_1_override += bloco_1500_override
         bloco_1_override.append(f"|1990|{len(bloco_1_override) + 1}|")
-        # debug apagar depois
-        _dbg_0900("antes_writer", conteudo_sem_m)
-        #-----------
-        # debug apagar depois
+
         print("DEBUG> bloco_m_override linhas:", len(bloco_m_override or []))
         if bloco_m_override:
             print("DEBUG> primeira:", bloco_m_override[0])

@@ -2,7 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List
 from collections import defaultdict
 from app.fiscal.scanners.exportacao import _dec_br
-from app.sped.blocoM.m_receita import CSTS_RECEITA_M, CSTS_RECEITA_NCUM
+from app.fiscal.settings_fiscais import CSTS_RECEITA_NCUM, CSTS_RECEITA_M
 
 REGS_RECEITA_BLOCO_C = {"C170", "C175", "C185", "C385", "C485", "C495", "C605", "C870", "C880"}
 

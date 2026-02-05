@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Dict, List, Any, Optional, Iterable, Tuple
 from decimal import Decimal
-
 from app.config.settings import ALIQUOTA_PIS_PCT, ALIQUOTA_COFINS_PCT
 from app.sped.blocoM.m_receita import (
     gerar_m_receitas,

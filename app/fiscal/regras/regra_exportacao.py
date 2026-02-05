@@ -1,9 +1,15 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Any, Dict, List
+
+from app.fiscal import contexto
+from app.fiscal.constants import (
+    GRUPO_EXPORTACAO,
+    SUBGRUPO_RESSARCIMENTO,
+    SUBGRUPO_CONSISTENCIA,
+)
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.achado import Achado, Prioridade
 from app.fiscal.regras.base_regras import RegraBase
-import logging
 from app.schemas.workflow import RevisaoFiscal
 from collections import defaultdict
 from app.sped.renderer import  _sha1
@@ -12,27 +18,9 @@ from app.config.settings import (
     ALIQUOTA_COFINS,
     ALIQUOTA_TOTAL,
 )
-from app.fiscal.constants import (
-    GRUPO_EXPORTACAO,
-    SUBGRUPO_RESSARCIMENTO,
-    SUBGRUPO_CONSISTENCIA,
-)
 
+import logging
 logger = logging.getLogger(__name__)
-
-def _deve_aplicar(ctx) -> bool:
-    credito = ctx.get("credito_total")
-    tem_export = bool(ctx.get("tem_exportacao"))
-    try:
-        if credito is None:
-            return tem_export
-        if not isinstance(credito, Decimal):
-            s = str(credito or "0").strip()
-            s = s.replace(".", "").replace(",", ".") if "," in s else s
-            credito = Decimal(s)
-        return credito > 0 or tem_export
-    except Exception:
-        return tem_export
 
 
 def _find_line_num(linhas: list[str], prefix: str) -> int | None:
@@ -50,6 +38,10 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
         try:
+            ctx = getattr(registro, "contexto", None)
+            if ctx and ctx.tem_apontamento("EXP_M_ZERADO_V1"):
+                return None
+
             # -------------------------------------------------
             # Proteções iniciais
             # -------------------------------------------------
@@ -69,32 +61,40 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
                 return None
 
             # -------------------------------------------------
-            # Cálculo da base de exportação
+            # Cálculo da base de exportação (somente itens válidos)
             # -------------------------------------------------
+            cat = self.get_catalogo(registro)
             base_por_cfop = defaultdict(lambda: Decimal("0"))
             cfops = set()
+            itens_usados = 0
 
             for it in itens:
                 if not isinstance(it, dict):
                     continue
-
                 cfop = str(it.get("cfop") or "").strip()
                 if not cfop:
                     continue
 
-                cfops.add(cfop)
+                # ✅ catálogo-driven: só exportação
+                if not self.cfop_match(cat, "CFOP_EXPORTACAO", cfop):
+                    continue
+
                 val = self.dec_br(it.get("vl_opr")) or Decimal("0")
-                if val > 0:
-                    base_por_cfop[cfop] += val
+                if val <= 0:
+                    continue
+
+                itens_usados += 1
+                cfops.add(cfop)
+                base_por_cfop[cfop] += val
 
             base_export = sum(base_por_cfop.values(), Decimal("0"))
-            if base_export <= 0:
+            if base_export <= 0 or itens_usados == 0:
                 return None
 
             base_export = self.q2(base_export)
 
             # -------------------------------------------------
-            # Créditos estimados
+            # Créditos estimados (PROXY por receita de exportação)
             # -------------------------------------------------
             cred_pis = self.q2(base_export * ALIQUOTA_PIS)
             cred_cof = self.q2(base_export * ALIQUOTA_COFINS)
@@ -126,6 +126,19 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
                     subcenario_m = "M_COM_APURACAO"
                 else:
                     subcenario_m = "M_INEXISTENTE"
+            else:
+                subcenario_m = "JA_CONTROLADO"
+
+            # -------------------------------------------------
+            # Concentração por CFOP (melhor que premiar variedade)
+            # -------------------------------------------------
+            top_cfop = None
+            top_val = Decimal("0")
+            if base_por_cfop:
+                top_cfop, top_val = max(base_por_cfop.items(), key=lambda kv: kv[1])
+
+            top_share = (top_val / base_export) if (base_export > 0 and top_cfop) else Decimal("0")
+
 
             # -------------------------------------------------
             # Score
@@ -133,6 +146,7 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
             score = 0
             motivos = []
 
+            # impacto (proxy)
             if impacto >= Decimal("50000"):
                 score += 60
             elif impacto >= Decimal("20000"):
@@ -143,35 +157,47 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
                 score += 25
             else:
                 score += 10
+            motivos.append(f"Impacto proxy R$ {self.fmt_br(impacto)}")
 
-            motivos.append(f"Impacto R$ {self.fmt_br(impacto)}")
-
+            # indícios de ressarcimento
             if not ja_tem_indicio_ressarc:
                 score += 25
                 motivos.append("Sem 1200/1210/1700")
             else:
-                score += 10
+                score += 5
+                motivos.append("Já há 1200/1210/1700")
 
+            # bloco M
             if bloco_m_zerado:
                 score += 15
                 motivos.append("Bloco M zerado")
             elif tem_apuracao_m:
                 score += 10
+                motivos.append("Bloco M com apuração")
 
-            qtd_cfops = len(base_por_cfop)
-            score += min(5, max(1, qtd_cfops))
+            # concentração
+            if top_share >= Decimal("0.80"):
+                score += 5
+                motivos.append(f"Concentrado em CFOP {top_cfop} ({self.pct(top_share)})")
+            else:
+                score += 2
 
             score = min(100, score)
 
-            if score >= 80:
-                bucket = "ALTA_CHANCE"
-                prioridade = "ALTA"
-            elif score >= 55:
-                bucket = "REVISAR"
-                prioridade = "MEDIA"
-            else:
-                bucket = "BAIXA"
+            # bucket/prioridade
+            if ja_tem_indicio_ressarc:
+                bucket = "JA_CONTROLADO"
                 prioridade = "BAIXA"
+            else:
+                if score >= 80:
+                    bucket = "ALTA_CHANCE"
+                    prioridade = "ALTA"
+                elif score >= 55:
+                    bucket = "REVISAR"
+                    prioridade = "MEDIA"
+                else:
+                    bucket = "BAIXA"
+                    prioridade = "BAIXA"
 
             # -------------------------------------------------
             # Descrição
@@ -182,12 +208,16 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
 
             desc = (
                 f"Exportação detectada (CFOP 7xxx): base R$ {base_fmt} "
-                f"({len(itens)} item(ns), {len(cfops)} CFOP(s)). "
-                f"Crédito estimado R$ {impacto_fmt} (9,25%). "
+                f"({itens_usados} item(ns) válidos, {len(cfops)} CFOP(s)). "
+                f"Crédito *proxy* estimado R$ {impacto_fmt} (9,25%). "
                 f"CFOPs (top): {cfops_top}. "
-                f"Validar Bloco M e controle via 1200/1210/1700."
             )
+            if ja_tem_indicio_ressarc:
+                desc += "Já há indício de controle (1200/1210/1700); validar coerência e Bloco M."
+            else:
+                desc += "Validar Bloco M e controle via 1200/1210/1700."
 
+            
             # -------------------------------------------------
             # Retorno
             # -------------------------------------------------
@@ -200,14 +230,23 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
                 impacto_financeiro=impacto,
                 prioridade=prioridade,
                 meta={
+                    "fonte_base": registro.reg,  # ex: C170_EXP_AGG / C190_EXP_AGG
+                    "empresa_id": registro.empresa_id,
+                    "versao_id": registro.versao_id,
+                    "metodo_estimativa": "proxy_receita_exportacao_9_25",
                     "base_exportacao": self.br_num(base_export),
                     "credito_pis_estimado": self.br_num(cred_pis),
                     "credito_cofins_estimado": self.br_num(cred_cof),
                     "impacto_consolidado": self.br_num(impacto),
+                    "itens_usados": int(itens_usados),
                     "qtd_cfops": len(base_por_cfop),
                     "cfops_detectados": sorted(cfops),
+                    "cfop_top": top_cfop,
+                    "cfop_top_share": str(top_share),
+                    "base_por_cfop": {k: self.br_num(self.q2(v)) for k, v in sorted(base_por_cfop.items())},
                     "bucket": bucket,
                     "score": score,
+                    "motivos_score": motivos,
                     "tem_1200": tem_1200,
                     "tem_1210": tem_1210,
                     "tem_1700": tem_1700,
@@ -223,3 +262,4 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
         except Exception:
             logger.exception("Erro na regra EXP_RESSARC_V1")
             return None
+

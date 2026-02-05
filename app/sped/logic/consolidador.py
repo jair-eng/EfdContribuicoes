@@ -174,35 +174,6 @@ def _get_dados(r: EfdRegistro) -> list[Any]:
     return list(dados_raw or [])
 
 
-def _lookup_refs(
-    db: Session,
-    *,
-    cfop: Optional[str],
-    cst_pis: Optional[str],
-    cst_cofins: Optional[str],
-) -> Dict[str, Any]:
-    """
-    Não bloqueia o MVP: valida se existe e retorna warnings.
-    """
-    warnings = []
-
-    if cfop:
-        found = db.get(RefCfop, cfop)
-        if not found:
-            warnings.append(f"CFOP {cfop} não cadastrado em ref_cfop (permitido no MVP).")
-
-    for label, cst in (("CST_PIS", cst_pis), ("CST_COFINS", cst_cofins)):
-        if cst:
-            obj = db.get(RefCstPisCofins, cst)
-            if not obj:
-                warnings.append(f"{label} {cst} não cadastrado em ref_cst_pis_cofins (permitido no MVP).")
-            else:
-                if getattr(obj, "gera_credito", False) is False:
-                    warnings.append(f"{label} {cst} está marcado como não-gerador de crédito na referência.")
-
-    return {"warnings": warnings}
-
-
 
 def aplicar_overlay_revisoes_c170(
     db,
@@ -386,10 +357,11 @@ def _normaliza_doc(s: Any) -> str:
     )
 
 
+
 def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     """
     True = PF (CPF) / False = PJ (CNPJ) ou ambíguo (não bloqueia).
-    Regra: se existir QUALQUER CNPJ (mesmo curto), NUNCA bloqueia como PF.
+    Regra: se existir QUALQUER CNPJ, NUNCA bloqueia como PF.
     """
 
     def only_digits(x: object) -> str:
@@ -397,14 +369,6 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
 
     def offset_if_reg_first(dados: list, reg: str) -> int:
         return 1 if dados and str(dados[0]).strip().upper() == reg else 0
-
-    def norm_cnpj(raw: object) -> str:
-        d = only_digits(raw)
-        if not d:
-            return ""
-        if len(d) > 14:
-            d = d[-14:]
-        return d.zfill(14)
 
     def norm_cpf(raw: object) -> str:
         d = only_digits(raw)
@@ -418,7 +382,7 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     if not reg_atual:
         return False
 
-    # acha C100 pai
+    # acha C100 pai (por id anterior)
     reg_c100 = reg_atual
     if reg_atual.reg == "C170":
         reg_c100 = (
@@ -441,7 +405,7 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     if not cod_part:
         return False
 
-    # tenta 0150 com $.dados[0] e fallback $.dados[1]
+    # tenta achar 0150 por $.dados[0] e fallback $.dados[1]
     reg_0150 = (
         db.query(EfdRegistro)
         .filter(
@@ -461,7 +425,6 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
             )
             .first()
         )
-
     if not reg_0150:
         return False
 
@@ -471,14 +434,10 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     raw_cnpj = d[3 + off_0150] if len(d) > (3 + off_0150) else ""
     raw_cpf  = d[4 + off_0150] if len(d) > (4 + off_0150) else ""
 
-    # >>> Regra: se tiver QUALQUER CNPJ, considera PJ e não bloqueia <<<
-    cnpj_digits = only_digits(raw_cnpj)
-    if cnpj_digits:
+    # se tiver QUALQUER CNPJ => PJ
+    if only_digits(raw_cnpj):
         return False
 
-    # Só chega aqui se CNPJ está vazio; aí sim pode ser PF
     cpf = norm_cpf(raw_cpf)
-    if len(cpf) == 11 and cpf != "00000000000":
-        return True
+    return len(cpf) == 11 and cpf != "00000000000"
 
-    return False

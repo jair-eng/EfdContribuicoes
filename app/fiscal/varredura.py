@@ -144,9 +144,10 @@ def executar_varredura(
                     )
                 else:
                     raise
-
+    print("CÓDIGOS antes:", sorted({a.get("codigo") for a in achados_raw}), flush=True)
     # ✅ pós-processamento 1 (bloqueio/supressão pontual por código)
     achados_raw = aplicar_supressao_por_erros_dict(achados_raw)
+    print("CÓDIGOS depois:", sorted({a.get("codigo") for a in achados_raw}), flush=True)
 
     # ✅ pós-processamento 1.1 (rebaixamento por presença — evita poluição)
     achados_raw = aplicar_rebaixamento_por_presenca_dict(

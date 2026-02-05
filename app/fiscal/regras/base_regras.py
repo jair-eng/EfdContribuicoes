@@ -3,6 +3,10 @@ from typing import Optional, List, Dict, Set, Tuple, Any
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
 from .achado import Achado
+import time
+from app.fiscal.contexto import get_fiscal_db, get_fiscal_empresa_id
+from ..cat_fiscal import CatalogoFiscal
+from ..ent_cat_fiscal import carregar_catalogo_fiscal
 import logging
 logger = logging.getLogger(__name__)
 
@@ -11,6 +15,8 @@ class RegraBase(ABC):
     codigo: str
     nome: str
     tipo: str
+    _CATALOGO_CACHE = {}  # empresa_id -> (ts, CatalogoFiscal)
+    _CATALOGO_TTL = 900  # 15 min
 
     @abstractmethod
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
@@ -127,6 +133,59 @@ class RegraBase(ABC):
         """
         d = d if isinstance(d, Decimal) else Decimal(str(d or "0"))
         return RegraBase.br_num(d * Decimal("100")) + "%"
+
+    @classmethod
+    def get_empresa_id(cls, registro) -> Optional[int]:
+        # 0) primeiro: DTO direto (scanner já injeta)
+        try:
+            eid = getattr(registro, "empresa_id", None)
+            if eid is not None:
+                return int(eid)
+        except Exception:
+            pass
+
+        # 1) tenta via _meta
+        try:
+            raw = registro.dados or []
+            if raw and isinstance(raw[0], dict) and "_meta" in raw[0]:
+                meta = raw[0].get("_meta") or {}
+                eid = meta.get("empresa_id")
+                if eid is not None:
+                    return int(eid)
+        except Exception:
+            pass
+
+        # 2) fallback: contexto global
+        return get_fiscal_empresa_id()
+
+    @classmethod
+    def get_catalogo(cls, registro, db=None) -> CatalogoFiscal:
+        empresa_id = cls.get_empresa_id(registro)
+        now = time.time()
+
+        hit = cls._CATALOGO_CACHE.get(empresa_id)
+        if hit and (now - hit[0]) < cls._CATALOGO_TTL:
+            return hit[1]
+
+        # db opcional; se não vier, pega do contexto
+        if db is None:
+            db = get_fiscal_db()
+
+        cat = carregar_catalogo_fiscal(db, empresa_id=empresa_id)
+        cls._CATALOGO_CACHE[empresa_id] = (now, cat)
+        return cat
+
+    @staticmethod
+    def cfop_match(cat: CatalogoFiscal, slug: str, cfop: str) -> bool:
+        s = (str(cfop or "")).strip()
+        if s.isdigit():
+            s = str(int(s))  # 01102 -> 1102
+        return cat.match_codigo(slug, s)
+
+    @staticmethod
+    def cst_match(cat: CatalogoFiscal, slug: str, cst: str) -> bool:
+        return cat.match_codigo(slug, cst)
+
 
 def _rebaixar_prioridade(p: str | None) -> str | None:
     if p == "ALTA":

@@ -13,6 +13,7 @@ class RegistroFiscalDTO:
     # --- NOVOS CAMPOS DE CONTEXTO ---
     is_pf: bool = False  # Indica se o registro pertence a um CPF
     versao_id: Optional[int] = None  # Necessário para consultas de apoio
+    empresa_id: Optional[int] = None
 
     base_credito: float = 0.0
     valor_credito: float = 0.0

@@ -5,12 +5,16 @@ from app.fiscal.scanner import FiscalScanner
 from typing import Optional, Literal, List, Dict, Any , Set
 from fastapi import APIRouter, Depends, HTTPException, Query, status , Body
 from app.db.session import get_db
-from app.db.models import EfdVersao
+from app.db.models import EfdVersao, EfdArquivo
 from app.db.models import EfdApontamento, EfdRegistro
 from sqlalchemy.orm import Session
 from app.api.payloads import ReprocessarSelecaoPayload
 from sqlalchemy import update, or_ , delete, case , Integer, select, func, exists
 from pydantic import BaseModel, Field
+import time
+import traceback
+from typing import Any, Dict
+from fastapi import HTTPException, status
 
 
 from app.schemas.workflow import AplicarRevisaoPayload, ApontamentosBatchPayload
@@ -32,17 +36,33 @@ def reprocessar_apontamentos(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
 
+    def dbg(msg: str) -> None:
+        print(f"[REPROCESSAR v{versao_id}] {msg}", flush=True)
+
+    t0 = time.time()
+    step = "INIT"
+
+    dbg(">>> INICIO")
+
     origem = db.query(EfdVersao).filter(EfdVersao.id == versao_id).first()
     if not origem:
+        dbg("ERRO: Versão não encontrada")
         raise HTTPException(status_code=404, detail="Versão não encontrada")
 
+    dbg(f"STATUS ATUAL = {origem.status}")
+
     if origem.status == "EXPORTADA":
-        raise HTTPException(status_code=400, detail="⚠️ Esta versão está EXPORTADA e é congelada. Reprocessar/editar está bloqueado.")
+        dbg("BLOQUEADO: versão EXPORTADA")
+        raise HTTPException(
+            status_code=400,
+            detail="⚠️ Esta versão está EXPORTADA e é congelada. Reprocessar/editar está bloqueado.",
+        )
 
     try:
         # -----------------------------
         # Checkpoint 0 (antes)
         # -----------------------------
+        step = "BEFORE_COUNTS"
         before_total = (
             db.query(func.count(EfdApontamento.id))
             .filter(EfdApontamento.versao_id == versao_id)
@@ -58,48 +78,93 @@ def reprocessar_apontamentos(
             .scalar()
         ) or 0
 
+        dbg(f"ANTES: total={int(before_total)} resolvidos={int(before_res)}")
+
         # -----------------------------
         # 1) Status da versão
         # -----------------------------
+        step = "SET_STATUS"
+        dbg("STEP SET_STATUS -> EM_REVISAO")
         db.execute(
             update(EfdVersao)
             .where(EfdVersao.id == versao_id)
             .values(status="EM_REVISAO")
             .execution_options(synchronize_session=False)
         )
+        db.flush()
+        dbg("OK SET_STATUS")
 
         # -----------------------------
         # 2) Hard reset: apaga tudo
         # -----------------------------
+        step = "DELETE_APONTAMENTOS"
+        dbg("STEP DELETE_APONTAMENTOS")
         db.execute(delete(EfdApontamento).where(EfdApontamento.versao_id == versao_id))
+        db.flush()
+
+        deleted_count = (
+            db.query(func.count(EfdApontamento.id))
+            .filter(EfdApontamento.versao_id == versao_id)
+            .scalar()
+        ) or 0
+        dbg(f"APOS DELETE: total={int(deleted_count)} (esperado 0)")
 
         # -----------------------------
         # 3) Scan (recria apontamentos)
         # -----------------------------
+        step = "SCAN"
+        aplicar_revisoes = bool(getattr(payload, "aplicar_revisoes", True))
+        preservar_resolvidos = bool(getattr(payload, "preservar_resolvidos", True))
+
+        dbg(f"STEP SCAN (aplicar_revisoes={aplicar_revisoes}, preservar_resolvidos={preservar_resolvidos})")
+        t_scan = time.time()
+
+        versao = db.get(EfdVersao, int(versao_id))
+        if not versao:
+            raise HTTPException(status_code=404, detail="Versão não encontrada.")
+
+        empresa_id = getattr(versao, "empresa_id", None)
+        if empresa_id is None and getattr(versao, "arquivo_id", None):
+            arquivo = db.get(EfdArquivo, int(versao.arquivo_id))
+            empresa_id = getattr(arquivo, "empresa_id", None)
+
+        if empresa_id is None:
+            raise HTTPException(status_code=400, detail="Não foi possível resolver empresa_id para a versão.")
+
         res = FiscalScanner.scan_versao(
             db,
-            versao_id=versao_id,
-            preservar_resolvidos=False,
-            aplicar_revisoes=bool(getattr(payload, "aplicar_revisoes", True)),
+            versao_id=int(versao_id),
+            empresa_id=int(empresa_id),
+            preservar_resolvidos=preservar_resolvidos,
+            aplicar_revisoes=aplicar_revisoes,
         )
 
+        dbg(f"OK SCAN em {time.time() - t_scan:.2f}s | scan_res={res}")
+
         # -----------------------------
-        # 4) Regra de sistema: após reprocessar, NADA fica resolvido
-        #    (cinto e suspensório, caso alguma regra/mapper tente setar True)
+        # 4) Força pendente
         # -----------------------------
+        step = "FORCE_PENDENTE"
+        dbg("STEP FORCE_PENDENTE (resolvido=False)")
         db.execute(
             update(EfdApontamento)
             .where(EfdApontamento.versao_id == versao_id)
             .values(resolvido=False)
             .execution_options(synchronize_session=False)
         )
+        db.flush()
+        dbg("OK FORCE_PENDENTE")
 
         # ✅ persiste tudo
+        step = "COMMIT"
+        dbg("STEP COMMIT")
         db.commit()
+        dbg("OK COMMIT")
 
         # -----------------------------
-        # Checkpoint final (depois do commit)
+        # Checkpoint final
         # -----------------------------
+        step = "AFTER_COUNTS"
         after_total = (
             db.query(func.count(EfdApontamento.id))
             .filter(EfdApontamento.versao_id == versao_id)
@@ -115,8 +180,10 @@ def reprocessar_apontamentos(
             .scalar()
         ) or 0
 
-        # Guard rail: não pode sobrar resolvido
+        dbg(f"DEPOIS: total={int(after_total)} resolvidos={int(after_res)}")
+
         if int(after_res) > 0:
+            step = "GUARD_RAIL_RESOLVIDOS"
             ids = [
                 r[0]
                 for r in (
@@ -129,10 +196,13 @@ def reprocessar_apontamentos(
                     .all()
                 )
             ]
+            dbg(f"BUG: sobrou resolvido! ids={ids}")
             raise HTTPException(
                 status_code=400,
                 detail=f"BUG: ainda existem resolvidos após hard reset. Ex IDs: {ids}",
             )
+
+        dbg(f">>> FIM OK em {time.time() - t0:.2f}s")
 
         return {
             "versao_id": versao_id,
@@ -142,17 +212,20 @@ def reprocessar_apontamentos(
             "after_resolvidos": int(after_res),
             "scan_result": res,
             "message": "Reprocessamento TOTAL: apontamentos recriados e forçados para pendente.",
-            "aplicar_revisoes": bool(getattr(payload, "aplicar_revisoes", True)),
-
+            "aplicar_revisoes": aplicar_revisoes,
+            "preservar_resolvidos": preservar_resolvidos,
+            "elapsed_s": round(time.time() - t0, 2),
         }
 
-    except HTTPException:
+    except HTTPException as e:
+        dbg(f"HTTPException step={step} status={e.status_code} detail={e.detail}")
         db.rollback()
         raise
     except Exception as e:
+        dbg(f"EXCEPTION step={step} err={repr(e)}")
+        dbg("TRACEBACK:\n" + traceback.format_exc())
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-
+        raise HTTPException(status_code=400, detail=f"BUG step={step}: {str(e)}")
 
 
 @router.get("/versao/{versao_id}/apontamentos/debug")
