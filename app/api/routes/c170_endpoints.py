@@ -277,6 +277,7 @@ def post_revisar_c170_global(
                 "message") or "Nenhum registro encontrado para os filtros informados."
             raise HTTPException(status_code=404, detail=msg)
 
+        db.commit()
         return resultado
 
 

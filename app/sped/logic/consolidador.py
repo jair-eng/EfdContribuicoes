@@ -122,7 +122,7 @@ def popular_pai_id(db: Session, versao_id: int):
                 print(f"⚠️ Alerta: Registro {r.reg} na linha {r.linha} não possui um C100 antecedente.")
 
     # Persiste as alterações no banco
-    db.commit()
+    db.flush()
 
     print(f"✅ Vinculação concluída!")
     print(f"   - Sucesso: {vinculados_count} registros vinculados.")

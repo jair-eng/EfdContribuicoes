@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.db.models.efd_revisao import EfdRevisao
 from app.fiscal.regras.registry import get_regra_por_codigo
 from app.fiscal.scanner import FiscalScanner
-from app.schemas.helpers import carregar_linhas_sped, extrair_credito_total
+from app.schemas.helpers import carregar_linhas_sped
 from app.services.revision_service import materializar_versao_revisada
 from app.services.workflow_service import WorkflowService
 from app.db.session import get_db
@@ -14,6 +14,7 @@ from sqlalchemy import or_, func
 from typing import Optional
 from sqlalchemy import delete
 from fastapi import Body
+from app.fiscal.constants import ACAO_OVERRIDE_BASE_POR_CST
 from app.fiscal.contexto import build_ctx_exportacao
 import logging
 logger = logging.getLogger(__name__)
@@ -189,24 +190,45 @@ def confirmar_revisao(
         }
 
         for r in revisoes:
+
+            if str(r.operacao) == ACAO_OVERRIDE_BASE_POR_CST:
+                payload = getattr(r, "payload", None) or {}
+
+                revisao_json = {
+                    "base_por_cst": payload.get("base_por_cst") or {},
+                    "cod_cont": payload.get("cod_cont") or "201",
+                    "nat_bc": payload.get("nat_bc") or "01",
+                    "detalhe": detalhe,
+                }
+
+                registro_id = None
+                reg = "M"
+
+            else:
+                revisao_json = {
+                    "linha_referencia": r.linha_referencia,
+                    "linha_antes": r.linha_antes,
+                    "linha_hash": r.linha_hash,
+                    "linha_nova": r.conteudo,
+                    "detalhe": detalhe,
+                }
+
+                registro_id = r.registro_id
+                reg = r.registro
+
             db.add(
                 EfdRevisao(
                     versao_origem_id=int(versao.id),
                     versao_revisada_id=None,
-                    registro_id=r.registro_id,
-                    reg=r.registro,
+                    registro_id=registro_id,
+                    reg=reg,
                     acao=r.operacao,
-                    revisao_json={
-                        "linha_referencia": r.linha_referencia,  # 1-based
-                        "linha_antes": r.linha_antes,  # ✅ novo
-                        "linha_hash": r.linha_hash,  # ✅ agora vem preenchido
-                        "linha_nova": r.conteudo,
-                        "detalhe": detalhe,
-                    },
+                    revisao_json=revisao_json,
                     motivo_codigo=r.regra_codigo,
                     apontamento_id=int(ap.id),
                 )
             )
+
 
         # ✅ cria/copia/aplica revisões => devolve a revisada
         versao_revisada_id = materializar_versao_revisada(db=db, versao_origem_id=int(versao_id))

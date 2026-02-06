@@ -2,28 +2,15 @@ from typing import Sequence, List, Dict, Any, Optional, Tuple
 from app.db.models import EfdRegistro
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal
-
-
+from app.sped.utils_geral import dec_br, pick_cod_item_c170, get_registro_id
 
 import logging
+
+from app.sped.utils_geral import _detectar_indicio_cafe_0200
 
 logger = logging.getLogger(__name__)
 
 
-def _dec_br(v) -> Decimal:
-    s = str(v or "").strip()
-    if not s:
-        return Decimal("0")
-
-    # se tiver vírgula, é pt-BR: 1.234,56
-    if "," in s:
-        s = s.replace(".", "").replace(",", ".")
-    # se não tiver vírgula, assume padrão: 1234.56 (não remove ponto)
-
-    try:
-        return Decimal(s)
-    except Exception:
-        return Decimal("0")
 
 
 def coletar_flags_bloco_m(registros_db: Sequence["EfdRegistro"]) -> Dict[str, Any]:
@@ -49,7 +36,7 @@ def coletar_flags_bloco_m(registros_db: Sequence["EfdRegistro"]) -> Dict[str, An
         # soma campos numéricos desde o início (dados[0] já é o primeiro valor do registro)
         # limita pra evitar pegar campos texto caso existam em layouts diferentes
         for idx in range(0, min(len(dados), 12)):
-            v = _dec_br(dados[idx])
+            v = dec_br(dados[idx])
             if v is not None:
                 soma += v
 
@@ -79,7 +66,7 @@ def coletar_creditos_bloco_m(registros_db):
         best = Decimal("0")
         for idx in idxs:
             if 0 <= idx < len(dados):
-                v = _dec_br(dados[idx])
+                v = dec_br(dados[idx])
                 if v > best:
                     best = v
         return best
@@ -424,6 +411,8 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
 
     dados_final: List[Any] = [{"_meta": flags}] + itens
 
+
+
     # ---------------------------------------------------------
     # 5) Retorno do DTO agregado
     # ---------------------------------------------------------
@@ -437,7 +426,16 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
 
 
 def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
-
+    map_item_desc = {}
+    for r in registros_db:
+        if (r.reg or "").strip() != "0200":
+            continue
+        d = (r.conteudo_json or {}).get("dados") or []
+        if len(d) >= 2:
+            cod = str(d[0] or "").strip()
+            desc = str(d[1] or "").strip()
+            if cod and desc:
+                map_item_desc[cod] = desc
     # ---------------------------------------------------------
     # 1) Identificação rápida dos registros presentes
     # ---------------------------------------------------------
@@ -455,7 +453,6 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     # ---------------------------------------------------------
     c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
 
-    print(f"[C170_AGG] total C170 encontrados: {len(c170s)}")
 
     if not c170s:
         return None
@@ -474,24 +471,47 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
             continue
 
         cfop = str(dados[9] or "").strip()
-
-        # Entradas: 1xxx / 2xxx
         if not (cfop and cfop[0] in ("1", "2")):
             continue
 
         vl_item = dados[5] if len(dados) > 5 else "0"
 
-        linha_r = int(getattr(r, "linha", 0) or 0)
+        # ✅ tenta capturar NCM de forma resiliente (índices comuns do C170)
+        # (se você souber o índice exato no seu parser, a gente fixa depois)
+        ncm = ""
+        for idx in (12, 11, 13, 10):
+            if len(dados) > idx:
+                cand = str(dados[idx] or "").strip()
+                cand = cand.replace(".", "")
+                if cand and cand.isdigit() and len(cand) >= 4:
+                    ncm = cand
+                    break
 
+        # ✅ COD_ITEM
+        cod_item = pick_cod_item_c170(dados)
+
+        linha_r = int(getattr(r, "linha", 0) or 0)
         if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
             anchor_linha = linha_r
+        descricao = map_item_desc.get(cod_item, "")
 
+        # ✅ ID real do registro (única fonte de verdade)
+        rid_real = int(getattr(r, "id", 0) or 0)
+        if rid_real <= 0:
+            rid_real = int(getattr(r, "registro_id", 0) or 0)
+
+        # ✅ ancora no 1º registro real que virou item válido
+        if flags.get("anchor_registro_id") is None and rid_real > 0:
+            flags["anchor_registro_id"] = rid_real
         itens.append({
             "cfop": cfop,
             "vl_opr": vl_item,
-            "registro_id": int(getattr(r, "id", 0) or 0),  # pode ser 0 (agregado sintético)
+            "ncm": ncm,
+            "descricao": descricao,
+            "cod_item": cod_item,
+            "registro_id": rid_real,
             "pai_id": getattr(r, "pai_id", None),
-            "linha": linha_r,  # útil para debug/rastreio
+            "linha": linha_r,
         })
 
     print(f"[C170_AGG] itens válidos: {len(itens)} anchor_linha={anchor_linha}")
@@ -517,18 +537,20 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     # Rastreabilidade
     flags["anchor_reg_base"] = "C170"
     flags["anchor_linha"] = anchor_linha
-    flags["anchor_registro_id"] = None  # ainda não temos id real
+    flags.setdefault("anchor_registro_id", None)
+    flags["tem_indicio_cafe"] = _detectar_indicio_cafe_0200(registros_db)
 
     dados_final: List[Any] = [{"_meta": flags}] + itens
 
     # ---------------------------------------------------------
     # 5) Retorno do DTO agregado
     # ---------------------------------------------------------
+    anchor_id = int(flags.get("anchor_registro_id") or 0)
+
     return RegistroFiscalDTO(
-        id=0,  # agregado sintético
+        id=anchor_id,  # ✅ ancora
         reg="C170_IND_TORRADO_AGG",
         linha=anchor_linha,
         dados=dados_final,
         is_pf=False
     )
-

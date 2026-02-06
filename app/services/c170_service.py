@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import Any, Dict, Optional, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from app.fiscal.settings_fiscais import CSTS_TRIB_NCUM
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
+from sqlalchemy import func, or_
 from app.sped.blocoC.c100_utils import patch_c100_totais_imposto, salvar_revisao_c100_automatica
 from app.sped.blocoC.c170_utils import patch_c170_campos, _validar_linha_c170
 from app.sped.formatter import formatar_linha
@@ -234,7 +236,7 @@ def revisar_c170_lote(
             print(f"❌ Erro na consolidação C100 {c100_id}: {e}")
             print(traceback.format_exc())
 
-    db.commit()
+    db.flush()
 
     return {
         "status": "ok",
@@ -333,3 +335,105 @@ def revisar_c170_global(
         "total_erros": erros,
         "detalhes": res_lote,
     }
+
+
+def aplicar_correcao_ind_torrado_cst51(
+    db: Session,
+    *,
+    versao_origem_id: int,
+    incluir_1102: bool = True,
+    csts_origem: Optional[List[str]] = None,
+    apontamento_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Correção automática (agressiva) para tese IND_TORRADO:
+      - Seleciona C170 por CFOP (fixo: 1101/1102/2101/2102/3101/3102)
+      - Filtra CSTs de origem (sem crédito)
+      - Aplica CST_PIS=51 e CST_COFINS=51 via revisar_c170_lote
+      - Bloco M será recalculado no export (base por VL_ITEM + CST_CREDITO/CSTS_TRIB_NCUM)
+    """
+
+    versao_origem_id = int(versao_origem_id)
+
+    # Guard-rail: garante que 51 é CST de crédito no teu settings
+    if "51" not in set(CSTS_TRIB_NCUM or set()):
+        raise ValueError("settings_fiscais.CSTS_TRIB_NCUM não contém '51'.")
+
+    # CFOPs fixos (café torrado: industrialização + revenda)
+    CFOPS_CAFE_TORRADO_ENTRADA = ["1101", "1102", "2101", "2102", "3101", "3102"]
+    cfops = list(CFOPS_CAFE_TORRADO_ENTRADA)
+
+    if not incluir_1102:
+        cfops = [c for c in cfops if c not in ("1102", "2102", "3102")]
+
+    print("[IND_TORRADO_CORR] versao=", versao_origem_id)
+    print("[IND_TORRADO_CORR] cfops=", cfops)
+
+    if not cfops:
+        return {"status": "vazio", "msg": "Sem CFOPs após filtros.", "candidatos": 0}
+
+    # CSTs de origem (agressivo por padrão)
+    if not csts_origem:
+        csts_origem = ["70", "73", "75", "98", "99", "06", "07", "08"]
+    csts_origem = [str(x).strip() for x in csts_origem if str(x).strip()]
+
+    print("[IND_TORRADO_CORR] csts_origem=", csts_origem)
+
+    # Garante pai_id (para trava PF no lote)
+    popular_pai_id(db, versao_origem_id)
+
+    # Expressões JSON
+    cfop_expr = func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[9]"))
+    cst_pis_expr = func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[23]"))
+    cst_cof_expr = func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[29]"))
+
+    # Query candidatos
+    cfop_filters = [cfop_expr == c for c in cfops]
+
+    q = (
+        db.query(EfdRegistro.id)
+        .filter(
+            EfdRegistro.versao_id == versao_origem_id,
+            EfdRegistro.reg == "C170",
+            or_(*cfop_filters),
+        )
+        .filter(
+            (cst_pis_expr.in_(csts_origem)) | (cst_cof_expr.in_(csts_origem))
+        )
+    )
+
+    #ids = [int(x[0]) for x in q.all()]
+    #print(f"[IND_TORRADO_CORR] candidatos={len(ids)}")
+    try:
+        ids = [int(x[0]) for x in q.all()]
+        print(f"[IND_TORRADO_CORR] candidatos={len(ids)}")
+    except Exception as e:
+        print("❌ [IND_TORRADO_CORR] ERRO query candidatos:", repr(e))
+        raise
+
+    if not ids:
+        return {"status": "vazio", "candidatos": 0}
+
+    # Monta lote: só CSTs (não mexe no CFOP)
+    lote = [{"registro_id": rid, "cfop": None, "cst_pis": "51", "cst_cofins": "51"} for rid in ids]
+
+    # Aplica via o teu service robusto (com trava PF + consolidação C100)
+    res = revisar_c170_lote(
+        db,
+        versao_origem_id=versao_origem_id,
+        alteracoes=lote,
+        motivo_codigo="IND_TORRADO_V1",
+        apontamento_id=apontamento_id,
+    )
+
+    out = {
+        "status": "ok",
+        "candidatos": len(ids),
+        "total_alterado": int(res.get("total_alterado") or 0),
+        "total_ignorado_pf": int(res.get("total_ignorado_pf") or 0),
+        "total_erros": int(res.get("total_erros") or 0),
+        "erros_detalhe": res.get("erros_detalhe") or [],
+    }
+
+    print("[IND_TORRADO_CORR] RESUMO:", out)
+    return out

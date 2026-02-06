@@ -7,7 +7,7 @@ from typing import Optional, Any, Tuple
 _CTX_DB: ContextVar[Any] = ContextVar("_CTX_DB", default=None)
 _CTX_EMPRESA_ID: ContextVar[Optional[int]] = ContextVar("_CTX_EMPRESA_ID", default=None)
 
-def _to_bool(v: Any) -> bool:
+def to_bool(v: Any) -> bool:
     if v is None:
         return False
     if isinstance(v, bool):
@@ -19,7 +19,20 @@ def _to_bool(v: Any) -> bool:
         return s in ("1", "true", "t", "yes", "y", "sim", "s", "on")
     return False
 
-def _dec_any(v: Any) -> Decimal:
+def dec_ptbr(v) -> Decimal:
+    if v is None:
+        return Decimal("0")
+    s = str(v).strip()
+    if not s:
+        return Decimal("0")
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0")
+
+def dec_any(v: Any) -> Decimal:
     s = str(v or "").strip()
     if not s:
         return Decimal("0")
@@ -38,11 +51,11 @@ def _dec_any(v: Any) -> Decimal:
     return Decimal(s)
 
 def build_ctx_exportacao(*, linhas_sped: list[str], meta: dict) -> dict:
-    credito_total = _dec_any(meta.get("credito_total")) or _dec_any(meta.get("impacto_consolidado"))
-    soma_m = _dec_any(meta.get("soma_valores_bloco_m")) or Decimal("0")
+    credito_total = dec_any(meta.get("credito_total")) or dec_any(meta.get("impacto_consolidado"))
+    soma_m = dec_any(meta.get("soma_valores_bloco_m")) or Decimal("0")
 
-    tem_apuracao_m = _to_bool(meta.get("tem_apuracao_m"))
-    bloco_m_zerado = _to_bool(meta.get("bloco_m_zerado"))
+    tem_apuracao_m = to_bool(meta.get("tem_apuracao_m"))
+    bloco_m_zerado = to_bool(meta.get("bloco_m_zerado"))
     if soma_m == Decimal("0") and tem_apuracao_m:
         bloco_m_zerado = True
 

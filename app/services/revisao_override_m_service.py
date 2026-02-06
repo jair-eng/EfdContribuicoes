@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
-from app.fiscal.scanners.exportacao import _dec_br
+from app.sped.utils_geral import dec_br
 from app.db.models.efd_revisao import EfdRevisao
 from app.db.models.efd_apontamento import EfdApontamento
 from app.sped.blocoM.blocoM import calcular_blocoM
@@ -57,12 +57,12 @@ def extrair_credito_total_do_bloco_m(bloco_m: List[str]) -> Decimal:
         if s.startswith("|M100|"):
             parts = s.split("|")
             if len(parts) > 8:
-                cred_pis += _dec_br(parts[8])
+                cred_pis += dec_br(parts[8])
 
         elif s.startswith("|M500|"):
             parts = s.split("|")
             if len(parts) > 8:
-                cred_cof += _dec_br(parts[8])
+                cred_cof += dec_br(parts[8])
 
     return (cred_pis + cred_cof).quantize(Decimal("0.01"))
 

@@ -5,7 +5,7 @@ from decimal import Decimal
 DB_USER = os.getenv("DB_USER", "sped_user")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "Jcbn2025#")
 DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_NAME = os.getenv("DB_NAME", "efd_creditos")  # ✅ alinhado com o DDL
+DB_NAME = os.getenv("DB_NAME", "sped_creditos_super")
 
 DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 # Impacto financeiro estimado (MVP)

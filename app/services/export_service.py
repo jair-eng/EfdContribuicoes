@@ -5,7 +5,7 @@ from typing import Any, Optional, Dict
 from pathlib import Path
 from sqlalchemy.orm import Session
 from app.config.settings import ALIQUOTA_PIS, ALIQUOTA_COFINS  # 0.0165 / 0.0760
-from app.fiscal.scanners.exportacao import _dec_br
+from app.sped.utils_geral import dec_br
 from app.services.revisao_override_m_service import (
     buscar_override_bloco_m,
     extrair_credito_total_do_bloco_m,
@@ -28,6 +28,7 @@ from app.sped.layouts.c170 import LAYOUT_C170
 from app.sped.blocoC.c170_utils import _parse_linha_sped_to_reg_dados
 from app.sped.logic.consolidador import obter_conteudo_final, eh_pf_por_c100
 from app.sped.bloco_1.utils_1500 import montar_bloco_1_1500_cumulativo, yyyymm_to_mmyyyy
+from app.services.revisao_override_base_service import buscar_override_base_por_cst
 
 
 
@@ -39,18 +40,21 @@ def exportar_sped(
     db: Session,
     valor_utilizado_mes: float = 0.0
 ) -> str:
-
     versao = db.get(EfdVersao, int(versao_id))
     if not versao:
         raise ValueError("Versão não encontrada")
 
     retifica_de = getattr(versao, "retifica_de_versao_id", None)
-    if retifica_de:
-        versao_origem_id = int(retifica_de)
-        versao_final_id = int(versao.id)
-    else:
-        versao_origem_id = int(versao.id)
-        versao_final_id = None
+
+    # 🔒 TRAVA: não exporta original
+    if not retifica_de:
+        raise ValueError(
+            "Exportação bloqueada: esta é uma versão ORIGINAL. "
+            "Primeiro confirme a revisão para materializar a versão revisada e só então exporte."
+        )
+
+    versao_origem_id = int(retifica_de)
+    versao_final_id = int(versao.id)
 
     print(f"EXPORT> versao_id={versao_id} | Origem={versao_origem_id} | Final={versao_final_id}")
 
@@ -117,7 +121,7 @@ def exportar_sped(
             if len(dados) <= LAYOUT_C170.idx_vl_item:
                 continue
 
-            vl_item = _dec_br(dados[LAYOUT_C170.idx_vl_item])
+            vl_item = dec_br(dados[LAYOUT_C170.idx_vl_item])
             if vl_item <= 0:
                 continue
 
@@ -138,7 +142,7 @@ def exportar_sped(
         )
 
         # 4) remove COMPLETAMENTE M* do conteúdo (por linha, não por reg do objeto)
-        conteudo_linhas = [obter_conteudo_final(l) for l in linhas]
+        conteudo_linhas = [(obter_conteudo_final(l) or "") for l in linhas]
         conteudo_sem_m = [ln for ln in conteudo_linhas if not (ln or "").lstrip().startswith("|M")]
 
 
@@ -177,13 +181,17 @@ def exportar_sped(
         # Agora sim, parse do conteúdo final (já com 0900 se inserido)
         parsed = parse_sped_from_lines(conteudo_sem_m)
 
-        # >>> Bloco 0900 <<<
-        conteudo_sem_m = aplicar_0900_se_necessario(
-            linhas_sped=conteudo_sem_m,
-            periodo_yyyymm=int(periodo_0000) if periodo_0000 else None,
+        # 6) Override de BASE por CST
+        override_base = buscar_override_base_por_cst(
+            db,
+            versao_origem_id=versao_origem_id,
+            versao_final_id=versao_final_id,
         )
+        if override_base is not None:
+            print("✅ BASE_POR_CST> usando OVERRIDE do banco (EfdRevisao)")
+            base_por_cst = override_base
 
-        # 6) Bloco M: override do banco > fallback construir_bloco_m_v3
+        # 6a) Bloco M: override do banco > fallback construir_bloco_m_v3
         override_db = buscar_override_bloco_m(
             db,
             versao_origem_id=versao_origem_id,

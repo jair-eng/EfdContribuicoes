@@ -8,9 +8,12 @@ from app.fiscal.constants import (
     GRUPO_EXPORTACAO,
     SUBGRUPO_CONSISTENCIA,
 )
+from app.fiscal.contexto import dec_ptbr
+from app.fiscal.constants import ACAO_OVERRIDE_BASE_POR_CST
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.base_regras import RegraBase
 from app.fiscal.regras.achado import Achado
+from app.schemas.workflow import RevisaoFiscal
 
 logger = logging.getLogger(__name__)
 
@@ -215,3 +218,49 @@ class RegraExportacaoBlocoMZeradoV1(RegraBase):
         except Exception:
             logger.exception("Erro na regra EXP_M_ZERADO_V1")
             return None
+
+    def gerar_revisoes_exp_ressarc_v1(self, ctx: dict) -> list:
+        """
+        Caminho B: não edita M diretamente.
+        Gera OVERRIDE_BASE_POR_CST para alimentar o construir_bloco_m_v3 no export.
+        """
+        try:
+            # trava definitiva: se existir erro crítico no contexto, não gera correção
+            contexto = ctx.get("contexto")
+            if contexto and getattr(contexto, "tem_apontamento", None):
+                if contexto.tem_apontamento("EXP_M_ZERADO_V1"):
+                    return []
+
+            ap = ctx.get("apontamento")
+            meta = (getattr(ap, "meta_json", None) or {}) if ap else {}
+
+            base_export = dec_ptbr(meta.get("base_exportacao"))
+            if base_export <= 0:
+                return []
+
+            # decisão do motor (comece simples): CST 50
+            base_por_cst = {"50": str(base_export.quantize(Decimal("0.01")))}
+
+            # Constrói RevisaoFiscal compatível com seu pipeline
+            # (ajuste o import/constructor conforme sua classe RevisaoFiscal real)
+            return [
+                RevisaoFiscal(
+                    registro_id=None,
+                    registro="M",
+                    operacao=ACAO_OVERRIDE_BASE_POR_CST,
+                    conteudo=None,
+                    linha_referencia=None,
+                    linha_antes=None,
+                    linha_hash=None,
+                    regra_codigo=self.codigo,
+                    payload={
+                        "base_por_cst": base_por_cst,
+                        "cod_cont": "201",
+                        "nat_bc": "01",
+                    },
+                )
+            ]
+
+        except Exception:
+            logger.exception("Erro ao gerar revisão OVERRIDE_BASE_POR_CST (EXP_RESSARC_V1)")
+            return []

@@ -10,6 +10,7 @@ from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.scanners.c190 import montar_c190_agg
 from app.db.models.efd_versao import EfdVersao
 from app.db.models.efd_arquivo import EfdArquivo
+from app.fiscal.scanners.c100_entrada import montar_c100_entrada_relevante_agg
 from app.fiscal.ent_cat_fiscal import carregar_catalogo_fiscal
 from app.fiscal.regras.base_regras import RegraBase
 from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_export_agg, montar_c190_ind_torrado_agg, \
@@ -128,6 +129,27 @@ class FiscalScanner:
                 continue  # expurgo
 
             rows_limpas.append(r)
+        # --- 2.2) ENRIQUECER rows_like com registro_id real (quando aplicar_revisoes=True) ---
+        # Isso garante anchor_registro_id e evita registro_id=0 nos AGGs.
+        for r in rows_limpas:
+            try:
+                linha_r = int(getattr(r, "linha", 0) or 0)
+                if linha_r <= 0:
+                    continue
+
+                rid = int(getattr(r, "registro_id", 0) or 0)
+                if rid <= 0:
+                    rid = int(linha_to_registro_id.get(linha_r, 0) or 0)
+                    if rid > 0:
+                        setattr(r, "registro_id", rid)
+
+                # opcional: alguns lugares ainda usam r.id
+                rid_id = int(getattr(r, "id", 0) or 0)
+                if rid_id <= 0 and rid > 0:
+                    setattr(r, "id", rid)
+
+            except Exception:
+                pass
 
         # 3) Converter para DTO (LIMPO E ROBUSTO COM REVISÕES)
         dtos: List[RegistroFiscalDTO] = []
@@ -185,6 +207,15 @@ class FiscalScanner:
                 pass
             dtos.append(meta_fiscal)
 
+        c100_ent = montar_c100_entrada_relevante_agg(rows_limpas)
+        if c100_ent:
+            try:
+                c100_ent.versao_id = versao_id
+                c100_ent.empresa_id = empresa_id_ctx
+            except Exception:
+                pass
+            dtos.append(c100_ent)
+
         c190_exp = montar_c190_export_agg(rows_limpas)
         if c190_exp:
             try:
@@ -229,24 +260,21 @@ class FiscalScanner:
             except Exception:
                 pass
             dtos.append(c190_agg)
-        print("DTOS regs (amostra):", [d.reg for d in dtos[-10:]], flush=True)
-        print("TEM C170_EXPORT?", any(d.reg in ("C170_EXP_AGG", "C170_EXPORT_AGG") for d in dtos), flush=True)
-        print("TEM C190_EXPORT?", any(d.reg in ("C190_EXP_AGG", "C190_EXPORT_AGG") for d in dtos), flush=True)
 
         # -----------------------------
         # 5) Executar motor fiscal
         # -----------------------------
         result = executar_varredura(dtos, capturar_erros=True)
 
-        # -----------------------------
-        # DEBUG: META_FISCAL
-        # -----------------------------
-        meta_count = sum(1 for d in dtos if (d.reg or "").strip() == "META_FISCAL")
-        print("DEBUG META_FISCAL dtos:", meta_count)
-        for d in dtos:
-            if (d.reg or "").strip() == "META_FISCAL":
-                print("DEBUG META_FISCAL dados[0]:", (d.dados or [None])[0])
-                break
+        #debug
+        from collections import Counter
+
+        cnt = Counter((a.codigo, a.tipo) for a in result.apontamentos)
+        print("[SCAN DEBUG] top codigos:", cnt.most_common(20))
+
+        # opcional: só o volume por codigo
+        cnt2 = Counter(a.codigo for a in result.apontamentos)
+        print("[SCAN DEBUG] top codigos (codigo):", cnt2.most_common(20))
 
         # -----------------------------
         # Helpers

@@ -25,7 +25,7 @@ class EfdRevisao(Base):
 
     # MVP: começamos só com substituir linha inteira
     acao = Column(
-        Enum("REPLACE_LINE","INSERT_AFTER","INSERT_BEFORE","DELETE","OVERRIDE_BLOCK_M","OVERRIDE_0900", name="efd_revisao_acao"),
+        Enum("REPLACE_LINE","INSERT_AFTER","INSERT_BEFORE","DELETE","OVERRIDE_BLOCK_M","OVERRIDE_0900","OVERRIDE_BASE_POR_CST", name="efd_revisao_acao"),
         nullable=False,
         default="REPLACE_LINE",
     )

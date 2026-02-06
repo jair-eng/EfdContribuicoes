@@ -5,6 +5,8 @@ from app.fiscal.regras.base_regras import RegraBase
 from collections import defaultdict
 import logging
 
+from app.sped.utils_geral import _item_parece_cafe
+
 # Opcional: Configurar o logger para este módulo específico
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,9 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
     DEBUG_MAX_SKIPS = 25
 
     def aplicar(self, registro: RegistroFiscalDTO):
+
+
+
         # 🛡️ PF
         if getattr(registro, "is_pf", False):
             return None
@@ -41,6 +46,9 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
         meta = {}
         if isinstance(dados[0], dict) and "_meta" in dados[0]:
             meta = dados[0].get("_meta") or {}
+        if not self.to_bool(meta.get("tem_indicio_cafe")):
+            logger.debug("IND_TORRADO: sem indício de café (0200) -> abort")
+            return None
 
         # ✅ Âncora do agregador (rastreabilidade quando id=0)
         anchor_reg_base = str(meta.get("anchor_reg_base") or "").strip() or None
@@ -56,14 +64,6 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
         if not itens:
             return None
 
-        logger.debug(
-            "IND_TORRADO start: registro_id=%s reg=%s versao_id=%s empresa_id=%s itens_total=%s",
-            getattr(registro, "id", None),
-            reg,
-            getattr(registro, "versao_id", None),
-            getattr(registro, "empresa_id", None),
-            len(itens),
-        )
 
         # -------------------------------------------------
         # Catálogo fiscal (CFOP)
@@ -93,7 +93,11 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
 
         skips_logados = 0
 
+        qtd_itens_com_info = 0
+        qtd_itens_cafe = 0
+        qtd_itens_bloqueados_nao_cafe = 0
         for it in itens:
+
             if not isinstance(it, dict):
                 continue
 
@@ -135,7 +139,38 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
                     skips_logados += 1
                 continue
 
-            # ✅ conta como válido
+            # -------------------------------------------------
+            # Filtro café (hard quando há descrição; soft quando não há info)
+            # -------------------------------------------------
+            desc = str(it.get("descricao") or "").strip()
+            ncm = str(it.get("ncm") or "").strip().replace(".", "")
+
+            tem_info = bool(ncm) or bool(desc)
+            eh_cafe = False
+
+            if ncm.startswith("0901"):
+                eh_cafe = True
+            elif desc:
+                # fallback: descrição
+                d = desc.upper()
+                # aceita CAFE e CAFÉ; evita falsos positivos comuns
+                if ("CAFE" in d) or ("CAFÉ" in d):
+                    eh_cafe = True
+
+            if tem_info:
+                qtd_itens_com_info += 1
+                if not eh_cafe:
+                    qtd_itens_bloqueados_nao_cafe += 1
+                    if skips_logados < self.DEBUG_MAX_SKIPS:
+                        logger.debug(
+                            "IND_TORRADO skip rid=%s cfop=%s: não-café (desc=%s ncm=%s)",
+                            rid, cfop, (desc[:60] + "...") if len(desc) > 60 else desc, ncm
+                        )
+                        skips_logados += 1
+                    continue
+                qtd_itens_cafe += 1
+
+            # ✅ SÓ AGORA conta como válido
             qtd_validos += 1
             base_total += val
 
@@ -144,6 +179,14 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
 
             if cfop in self.CFOPS_REVENDA:
                 cfops_revenda_usados.add(cfop)
+        # Se a maioria dos itens tinha info e quase nenhum parece café, aborta agressivo.
+        # Isso elimina falso positivo em posto quando o AGG já traz NCM/descrição.
+        if qtd_itens_com_info >= 3 and qtd_itens_cafe == 0:
+            logger.debug(
+                "IND_TORRADO: itens com info=%s, cafe_detectado=%s -> abort (provável não-café)",
+                qtd_itens_com_info, qtd_itens_cafe
+            )
+            return None
 
         if qtd_validos == 0 or base_total <= 0:
             logger.debug("IND_TORRADO: nenhum item válido (total=%s) -> abort", qtd_total)
@@ -181,6 +224,10 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
             "anchor_linha": anchor_linha,
             "anchor_registro_id": anchor_registro_id,
             "linha_anchor": anchor_linha,  # atalho pro CSV/UI
+            "cafe_filtro_soft": True,
+            "qtd_itens_com_info": int(qtd_itens_com_info),
+            "qtd_itens_cafe": int(qtd_itens_cafe),
+            "qtd_itens_bloqueados_nao_cafe": int(qtd_itens_bloqueados_nao_cafe),
 
             "qtd_itens_total": int(qtd_total),
             "qtd_itens_validos": int(qtd_validos),
@@ -206,8 +253,18 @@ class RegraIndustrializacaoTorradoV1(RegraBase):
         else:
             desc += "CFOPs de industrialização predominantes; validar enquadramento/insumo."
 
+        # ✅ usa âncora real quando o DTO é agregado (id=0)
+        rid = int(getattr(registro, "id", 0) or 0)
+        anchor_rid = meta.get("anchor_registro_id") if isinstance(meta, dict) else None
+        try:
+            anchor_rid = int(anchor_rid) if anchor_rid is not None else None
+        except Exception:
+            anchor_rid = None
+
+        registro_id_final = rid if rid > 0 else (anchor_rid or 0)
+
         return {
-            "registro_id": int(registro.id),
+            "registro_id": int(registro_id_final),
             "tipo": self.tipo,
             "codigo": self.codigo,
             "descricao": desc,
