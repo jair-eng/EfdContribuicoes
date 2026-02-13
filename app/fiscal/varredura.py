@@ -7,6 +7,8 @@ from app.fiscal.regras.regra_exportacao import RegraExportacaoRessarcimentoV1
 from app.fiscal.regras.regra_f600_insumos import RegraF600Insumos
 from app.fiscal.regras.regra_c170_insumos import RegraC170Insumos
 from app.fiscal.regras.regra_c190_credito_potencial import RegraC190CreditoPotencial
+from app.fiscal.regras.regra_ind_cafe_v1 import RegraIndustrializacaoCafeV1
+from app.fiscal.regras.regra_industrializacao_graos_v1 import RegraIndustrializacaoAgroV1
 from app.fiscal.regras.regra_m100_credito_pis import RegraM100CreditoPIS
 from app.fiscal.regras.regra_m200_credito_cofins import RegraM200CreditoCOFINS
 from app.fiscal.regras.regra_c100_entrada_relevante import RegraC100EntradaRelevante
@@ -16,8 +18,7 @@ from app.fiscal.regras.achado import Achado
 from app.fiscal.regras.regra_posto_monofasico_credito_acumulado_v1 import RegraPostoMonofasicoCreditoAcumuladoV1
 from app.fiscal.regras.regra_exp_m_zerado_v1 import RegraExportacaoBlocoMZeradoV1
 from app.fiscal.regras.base_regras import aplicar_supressao_por_erros_dict, aplicar_bloqueio_por_grupo_dict, \
-    aplicar_rebaixamento_por_presenca_dict
-from app.fiscal.regras.regra_industrializacao_torrado_v1 import RegraIndustrializacaoTorradoV1
+    aplicar_rebaixamento_por_presenca_dict, RegraBase
 
 print("ACHADO_CLASS =", Achado)
 print("ACHADO_MODULE =", Achado.__module__)
@@ -33,7 +34,8 @@ REGRAS_ATIVAS = [
     RegraExportacaoRessarcimentoV1(),
     RegraPostoMonofasicoCreditoAcumuladoV1(),
     RegraExportacaoBlocoMZeradoV1(),
-    RegraIndustrializacaoTorradoV1(),
+    RegraIndustrializacaoAgroV1(),
+    RegraIndustrializacaoCafeV1(),
 
 ]
 
@@ -97,8 +99,22 @@ def executar_varredura(
 
     achados_raw = []
 
+    # ✅ Warm-up catálogo (1x por varredura)
+    try:
+        if registros:
+            # pega um registro qualquer que tenha empresa_id
+            r0 = next((r for r in registros if getattr(r, "empresa_id", None)), registros[0])
+            # chama uma vez pra encher o cache por empresa_id
+            RegraBase.get_catalogo(r0, db=None)
+    except Exception:
+        # não pode derrubar varredura por isso
+        pass
+    print("[DBG] REGRAS_ATIVAS:", [getattr(r, "codigo", r.__class__.__name__) for r in REGRAS_ATIVAS], flush=True)
+
     for registro in registros:
         for regra in REGRAS_ATIVAS:
+
+
             try:
                 achado = regra.aplicar(registro)
                 if not achado:
@@ -153,7 +169,7 @@ def executar_varredura(
     achados_raw = aplicar_rebaixamento_por_presenca_dict(
         achados_raw,
         se_existe="CAFE_C190_V1",
-        rebaixar=["IND_TORRADO_V1"],
+        rebaixar=["IND_AGRO_V1"],
         prioridade_alvo="BAIXA",
     )
 

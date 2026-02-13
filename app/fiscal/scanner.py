@@ -21,7 +21,10 @@ from app.fiscal.scanners.exportacao import montar_meta_fiscal
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
 from app.sped.blocoC.c170_utils import linhas_para_rows_like
 from app.fiscal.contexto import set_fiscal_context
+import re
 import logging
+
+from app.sped.utils_geral import consolidar_achados_c170_insumo_v2
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +99,7 @@ class FiscalScanner:
 
         # 2) Aplicar Revisões (Merge em memória)
         if aplicar_revisoes:
+
             linhas = carregar_linhas_logicas_com_revisoes(db, versao_origem_id=int(versao_id))
             rows_agg = linhas_para_rows_like(linhas)  # para agregadores
             fonte_base = linhas  # para DTOs
@@ -151,6 +155,36 @@ class FiscalScanner:
             except Exception:
                 pass
 
+        # -------------------------------------------------
+        # 2.3) Mapa 0200 (COD_ITEM -> NCM) usando fonte_base
+        # -------------------------------------------------
+        item_to_ncm: dict[str, str] = {}
+
+        for l in fonte_base:
+            reg_nome_l = str(getattr(l, "reg", "")).strip().upper()
+            if reg_nome_l != "0200":
+                continue
+
+            raw_dados_0200 = getattr(l, "dados", None)
+
+            if not raw_dados_0200:
+                cj = getattr(l, "conteudo_json", None) or {}
+                if isinstance(cj, dict):
+                    raw_dados_0200 = cj.get("dados")
+
+            if not raw_dados_0200:
+                rj = getattr(l, "revisao_json", None) or {}
+                if isinstance(rj, dict):
+                    raw_dados_0200 = rj.get("dados")
+
+            dados_0200 = list(raw_dados_0200 or [])
+            cod_item = str(dados_0200[0]).strip() if len(dados_0200) > 0 else ""
+            ncm_raw = str(dados_0200[6] or "") if len(dados_0200) > 6 else ""
+            ncm = "".join(filter(str.isdigit, ncm_raw))
+
+            if cod_item and ncm:
+                item_to_ncm[cod_item] = ncm
+
         # 3) Converter para DTO (LIMPO E ROBUSTO COM REVISÕES)
         dtos: List[RegistroFiscalDTO] = []
 
@@ -182,6 +216,20 @@ class FiscalScanner:
 
             dados_list = list(raw_dados or [])
 
+            meta: dict[str, Any] = {}
+
+            if reg_nome == "C170":
+                cod_item = str(dados_list[1]).strip() if len(dados_list) > 1 else ""
+                ncm = item_to_ncm.get(cod_item)
+                if ncm:
+                    meta["ncm"] = ncm
+
+                if cod_item:
+                    meta["cod_item"] = cod_item
+
+            # opcional: se quiser rastrear origem
+            meta["fonte_base"] = "overlay" if aplicar_revisoes else "original"
+
             dtos.append(
                 RegistroFiscalDTO(
                     id=int(rid_real),
@@ -191,13 +239,22 @@ class FiscalScanner:
                     is_pf=is_pessoa_fisica,
                     versao_id=int(versao_id),
                     empresa_id=int(empresa_id),
+                    meta=meta,
                 )
             )
 
         # -----------------------------
         # 4) Injetar META_FISCAL e agregadores (sempre usando rows_limpas)
         # -----------------------------
-        meta_fiscal = montar_meta_fiscal(rows_limpas)
+        cat = None
+        try:
+            # já existe set_fiscal_context(db, empresa_id_ctx) antes, então:
+            cat = carregar_catalogo_fiscal(db, empresa_id=empresa_id_ctx)
+        except Exception:
+            cat = None
+
+        meta_fiscal = montar_meta_fiscal(rows_limpas, catalogo=cat, debug=False)
+
         if meta_fiscal:
             # garantir contexto também no meta (se DTO suportar)
             try:
@@ -208,6 +265,7 @@ class FiscalScanner:
             dtos.append(meta_fiscal)
 
         c100_ent = montar_c100_entrada_relevante_agg(rows_limpas)
+
         if c100_ent:
             try:
                 c100_ent.versao_id = versao_id
@@ -264,17 +322,12 @@ class FiscalScanner:
         # -----------------------------
         # 5) Executar motor fiscal
         # -----------------------------
+        for d in dtos:
+            if (d.reg or "").strip() == "META_FISCAL":
+                print("[META_FISCAL DTO] dados=", d.dados, flush=True)
+                break
+
         result = executar_varredura(dtos, capturar_erros=True)
-
-        #debug
-        from collections import Counter
-
-        cnt = Counter((a.codigo, a.tipo) for a in result.apontamentos)
-        print("[SCAN DEBUG] top codigos:", cnt.most_common(20))
-
-        # opcional: só o volume por codigo
-        cnt2 = Counter(a.codigo for a in result.apontamentos)
-        print("[SCAN DEBUG] top codigos (codigo):", cnt2.most_common(20))
 
         # -----------------------------
         # Helpers
@@ -355,6 +408,8 @@ class FiscalScanner:
         # -----------------------------
         grupos = defaultdict(lambda: {"total": Decimal("0"), "qtd": 0, "repr_registro_id": None})
 
+        consolidar_achados_c170_insumo_v2(result)
+
         for a in result.apontamentos:
             if _norm_codigo(getattr(a, "codigo", None)) != "C190-ENT":
                 continue
@@ -406,6 +461,7 @@ class FiscalScanner:
                         },
                     )
                 )
+
 
         # -----------------------------
         # 7) Inserir/atualizar apontamentos
@@ -505,94 +561,7 @@ class FiscalScanner:
         if to_insert:
             db.bulk_save_objects(to_insert)
 
-        # -----------------------------
-        # C190-SUM no banco (robusto, sem depender de meta)
-        # -----------------------------
-        db.execute(
-            text(
-                """
-                DELETE
-                FROM efd_apontamento
-                WHERE versao_id = :vid
-                  AND codigo = 'C190-SUM'
-                """
-            ),
-            {"vid": versao_id},
-        )
 
-        db.execute(
-            text(
-                """
-                INSERT INTO efd_apontamento
-                (versao_id, registro_id, tipo, codigo, descricao, impacto_financeiro, prioridade, resolvido)
-                SELECT t.versao_id,
-                       t.registro_id,
-                       'OPORTUNIDADE'            AS tipo,
-                       'C190-SUM'                AS codigo,
-                       CONCAT(
-                               'C190 agregado: CFOP=', t.cfop,
-                               ' CST=', t.cst_icms,
-                               ' — ', t.qtd,
-                               ' operação(ões) — impacto est. ', ROUND(t.impacto_total, 2)
-                       )                         AS descricao,
-                       ROUND(t.impacto_total, 2) AS impacto_financeiro,
-                       'ALTA'                    AS prioridade,
-                       0                         AS resolvido
-                FROM (
-                    SELECT a.versao_id                                               AS versao_id,
-                           MIN(a.registro_id)                                        AS registro_id,
-                           JSON_UNQUOTE(JSON_EXTRACT(r.conteudo_json, '$.dados[1]')) AS cfop,
-                           JSON_UNQUOTE(JSON_EXTRACT(r.conteudo_json, '$.dados[0]')) AS cst_icms,
-                           COUNT(*)                                                  AS qtd,
-                           SUM(
-                               CAST(
-                                   REPLACE(
-                                       JSON_UNQUOTE(JSON_EXTRACT(r.conteudo_json, '$.dados[3]')),
-                                       ',', '.'
-                                   ) AS DECIMAL(15, 2)
-                               )
-                           ) * 0.0925                                                AS impacto_total
-                    FROM efd_apontamento a
-                    JOIN efd_registro r ON r.id = a.registro_id
-                    WHERE a.versao_id = :vid
-                      AND a.codigo = 'C190-ENT'
-                    GROUP BY a.versao_id,
-                             JSON_UNQUOTE(JSON_EXTRACT(r.conteudo_json, '$.dados[1]')),
-                             JSON_UNQUOTE(JSON_EXTRACT(r.conteudo_json, '$.dados[0]'))
-                    HAVING COUNT(*) >= 2
-                ) t
-                """
-            ),
-            {"vid": versao_id},
-        )
-
-        sum_qtd = (
-            db.execute(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM efd_apontamento
-                    WHERE versao_id = :vid
-                      AND codigo = 'C190-SUM'
-                    """
-                ),
-                {"vid": versao_id},
-            ).scalar()
-            or 0
-        )
-
-        if int(sum_qtd) > 0:
-            db.execute(
-                text(
-                    """
-                    UPDATE efd_apontamento
-                    SET prioridade = 'BAIXA'
-                    WHERE versao_id = :vid
-                      AND codigo = 'C190-ENT'
-                    """
-                ),
-                {"vid": versao_id},
-            )
 
         logger.warning("SCAN FINAL | versao_id=%s | descartados_sem_fk=%s", versao_id, descartados_sem_fk)
 

@@ -5,6 +5,8 @@ from typing import Any, Optional, Dict
 from pathlib import Path
 from sqlalchemy.orm import Session
 from app.config.settings import ALIQUOTA_PIS, ALIQUOTA_COFINS  # 0.0165 / 0.0760
+from app.sped.bloco_1.historico_fs import extrair_cnpj_periodo_do_0000, buscar_sped_exportado_anterior_por_pasta, \
+    ler_linhas_sped
 from app.sped.utils_geral import dec_br
 from app.services.revisao_override_m_service import (
     buscar_override_bloco_m,
@@ -13,10 +15,7 @@ from app.services.revisao_override_m_service import (
 from app.sped.blocoM.blocoM import construir_bloco_m_v3
 from app.sped.bloco_0.bloco_0_0900 import aplicar_0900_se_necessario
 from app.sped.bloco_1.builder import (
-    montar_bloco_1_1100_cumulativo,
-    buscar_sped_exportado_anterior_por_pasta,
-    ler_linhas_sped,
-    extrair_cnpj_periodo_do_0000
+     montar_bloco_1_1100_1500_cumulativo, extrair_creditos_mes_bloco_m
 )
 from app.db.models import EfdVersao, EfdArquivo
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
@@ -215,6 +214,7 @@ def exportar_sped(
 
             credito_total_1100 = credito_total_calc
 
+
         # 7) Bloco 1 (1100/1500)
         periodo_atual = getattr(arquivo, "periodo", None)
         if not periodo_atual:
@@ -231,11 +231,14 @@ def exportar_sped(
                 valor_utilizado_mes=valor_utilizado_mes_dec,
             )
 
-        bloco_1_override = montar_bloco_1_1100_cumulativo(
+        credito_pis_mes, credito_cofins_mes = extrair_creditos_mes_bloco_m(bloco_m_override)
+
+        bloco_1_override = montar_bloco_1_1100_1500_cumulativo(
             linhas_sped=linhas_prev,
             periodo_atual=periodo_atual_mmaaaa,
             cod_cont="201",
-            credito_mes=credito_total_1100,
+            credito_pis_mes=credito_pis_mes,
+            credito_cofins_mes=credito_cofins_mes,
         )
 
         if bloco_1_override and bloco_1_override[-1].startswith("|1990|"):

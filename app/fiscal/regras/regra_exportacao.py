@@ -5,8 +5,9 @@ from app.fiscal import contexto
 from app.fiscal.constants import (
     GRUPO_EXPORTACAO,
     SUBGRUPO_RESSARCIMENTO,
-    SUBGRUPO_CONSISTENCIA,
+    SUBGRUPO_CONSISTENCIA, ACAO_OVERRIDE_BASE_POR_CST,
 )
+from app.fiscal.contexto import dec_ptbr
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.achado import Achado, Prioridade
 from app.fiscal.regras.base_regras import RegraBase
@@ -38,10 +39,6 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
         try:
-            ctx = getattr(registro, "contexto", None)
-            if ctx and ctx.tem_apontamento("EXP_M_ZERADO_V1"):
-                return None
-
             # -------------------------------------------------
             # Proteções iniciais
             # -------------------------------------------------
@@ -263,3 +260,46 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
             logger.exception("Erro na regra EXP_RESSARC_V1")
             return None
 
+    def gerar_revisoes_exp_ressarc_v1(self, ctx: dict) -> list:
+        """
+        Gera OVERRIDE_BASE_POR_CST para alimentar o construir_bloco_m_v3 no export.
+        Não edita M diretamente.
+        """
+        try:
+            ap = ctx.get("apontamento")
+            meta = (getattr(ap, "meta_json", None) or {}) if ap else {}
+
+            base_export = dec_ptbr(meta.get("base_exportacao"))
+            if base_export <= 0:
+                return []
+
+            # decisão inicial do motor: CST 50
+            base_por_cst = {
+                "51": str(base_export.quantize(Decimal("0.01")))
+            }
+
+            # âncora (evita revisão sem FK)
+            registro_id = int(getattr(ap, "registro_id", 0) or 0)
+            registro_reg = str(getattr(ap, "registro", "") or "C170")
+
+            return [
+                RevisaoFiscal(
+                    registro_id=registro_id if registro_id > 0 else None,
+                    registro=registro_reg,
+                    operacao=ACAO_OVERRIDE_BASE_POR_CST,
+                    conteudo=None,
+                    linha_referencia=None,
+                    linha_antes=None,
+                    linha_hash=None,
+                    regra_codigo=self.codigo,
+                    payload={
+                        "base_por_cst": base_por_cst,
+                        "cod_cont": "201",
+                        "nat_bc": "01",
+                    },
+                )
+            ]
+
+        except Exception:
+            logger.exception("Erro ao gerar revisão OVERRIDE_BASE_POR_CST (EXP_RESSARC_V1)")
+            return []

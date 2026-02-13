@@ -101,7 +101,7 @@ def aplicar_revisoes_replace_line(
     revisoes_validas: List[Dict[str, Any]] = []
     for r in replaces:
         rj = r.get("revisao_json") or {}
-        linha_txt = r.get("linha") or rj.get("linha_nova") or rj.get("linha") or ""
+        linha_txt = rj.get("linha_nova") or r.get("linha") or rj.get("linha") or ""
         if not linha_txt:
             continue
 
@@ -111,12 +111,49 @@ def aplicar_revisoes_replace_line(
         rr["linha_ref"] = int(linha_ref or 0)
         revisoes_validas.append(rr)
 
-    if not preferir_ultima:
-        revisoes_validas = list(reversed(revisoes_validas))
+    # -------------------------------------------------
+    # 2.1) Escolher 1 revisão vencedora por alvo
+    # - preferir_ultima=True => maior id vence
+    # - preferir_ultima=False => menor id vence
+    # -------------------------------------------------
+    def _rev_key(rv: Dict[str, Any]) -> int:
+        try:
+            return int(rv.get("id") or 0)
+        except Exception:
+            return 0
+
+    # chave do alvo: preferimos registro_id; se não tiver, cai pra linha_ref (negativo só pra não colidir)
+    def _alvo_key(rv: Dict[str, Any]) -> int:
+        rid = int(rv.get("registro_id") or 0)
+        if rid > 0:
+            return rid
+        lr = int(rv.get("linha_ref") or 0)
+        return -lr if lr > 0 else 0
+
+    vencedora_por_alvo: Dict[int, Dict[str, Any]] = {}
+
+    for rv in revisoes_validas:
+        k = _alvo_key(rv)
+        if not k:
+            continue
+
+        atual = vencedora_por_alvo.get(k)
+        if atual is None:
+            vencedora_por_alvo[k] = rv
+            continue
+
+        if preferir_ultima:
+            if _rev_key(rv) >= _rev_key(atual):
+                vencedora_por_alvo[k] = rv
+        else:
+            if _rev_key(rv) <= _rev_key(atual):
+                vencedora_por_alvo[k] = rv
+
+    revisoes_final = list(vencedora_por_alvo.values())
 
     hits_id = hits_linha = miss = 0
 
-    for rv in revisoes_validas:
+    for rv in revisoes_final:
         rid = int(rv.get("registro_id") or 0)
 
         # Se o registro já foi deletado, ignoramos o replace
@@ -125,6 +162,7 @@ def aplicar_revisoes_replace_line(
 
         linha_ref = int(rv.get("linha_ref") or 0)
         linha_txt = str(rv["linha_final"])
+        ...
 
         alvo = por_id.get(rid) if rid else None
         if alvo is None and linha_ref:

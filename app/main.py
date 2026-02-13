@@ -14,6 +14,7 @@ from app.api.empresa_endpoints import router as empresa_router
 from app.api.routes.revision_endpoints import router as revision_router
 import app.db.models.models_all # noqa  ✅ garante que todos os models foram carregados
 from app.api.routes.c170_endpoints import router as c170_router
+from app.api.routes.dossie import router as dossie_router
 import logging
 import sys
 
@@ -47,6 +48,7 @@ app.include_router(empresa_resumo_router)
 app.include_router(empresa_router)
 app.include_router(revision_router)
 app.include_router(c170_router)
+app.include_router(dossie_router)
 
 
 @app.on_event("startup")

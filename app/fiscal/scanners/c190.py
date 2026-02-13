@@ -1,13 +1,15 @@
-from typing import Sequence, Any, Dict, List
+from typing import Sequence
 from app.db.models import EfdRegistro
 from app.fiscal.dto import RegistroFiscalDTO
+
 
 def montar_c190_agg(registros_db: Sequence[EfdRegistro]) -> RegistroFiscalDTO | None:
     c190s = [r for r in registros_db if (r.reg or "").strip() == "C190"]
     if not c190s:
         return None
 
-    anchor = min(c190s, key=lambda r: r.id)
+    # pega o primeiro C190 por id só pra ancorar linha/id do DTO
+    anchor_reg = min(c190s, key=lambda r: int(r.id))
 
     itens = []
     for r in c190s:
@@ -17,14 +19,15 @@ def montar_c190_agg(registros_db: Sequence[EfdRegistro]) -> RegistroFiscalDTO | 
                 "cst": dados[0],
                 "cfop": dados[1],
                 "vl_opr": dados[3],
+                "linha": int(getattr(r, "linha", 0) or 0),  # opcional, mas ajuda no top3
             })
 
     if not itens:
         return None
 
     return RegistroFiscalDTO(
-        id=int(anchor.id),
+        id=int(anchor_reg.id),
         reg="C190_AGG",
-        linha=int(anchor.linha),
+        linha=int(getattr(anchor_reg, "linha", 0) or 0),
         dados=itens,
     )

@@ -55,7 +55,7 @@ if "menu" not in st.session_state:
 
 
 # --- Layout ---
-st.title("SPED Créditos — Front (MVP)")
+st.title("SPED - Efd Contribuições")
 
 # Health check rápido (sidebar)
 with st.sidebar:
@@ -103,7 +103,7 @@ page = st.session_state["page"]
 
 if page == "Home":
 
-    st.markdown("## SPED Créditos")
+    st.markdown("## Recuperação de Créditos")
     st.markdown("### Inteligência Tributária")
 
     st.caption(

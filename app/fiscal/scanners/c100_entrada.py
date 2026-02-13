@@ -8,14 +8,33 @@ from app.db.models import EfdRegistro
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.base_regras import RegraBase  # só p/ helpers se quiser, opcional
 
-
 def montar_c100_entrada_relevante_agg(
     registros_db: Sequence[EfdRegistro],
     *,
     vl_doc_min: Decimal = Decimal("50000"),
     top_n: int = 30,
 ) -> Optional[RegistroFiscalDTO]:
-    c100s = [r for r in registros_db if (r.reg or "").strip() == "C100"]
+
+    def _dados_any(r) -> list:
+        # 1) se já tem atributo .dados (rows_like / LinhaLogica->row)
+        raw = getattr(r, "dados", None)
+        if raw:
+            return list(raw)
+
+        # 2) EfdRegistro padrão
+        cj = getattr(r, "conteudo_json", None) or {}
+        if isinstance(cj, dict) and cj.get("dados"):
+            return list(cj.get("dados") or [])
+
+        # 3) revisao_json (se existir)
+        rj = getattr(r, "revisao_json", None) or {}
+        if isinstance(rj, dict) and rj.get("dados"):
+            return list(rj.get("dados") or [])
+
+        return []
+
+    # aceita "C100" mesmo se vier upper
+    c100s = [r for r in registros_db if str(getattr(r, "reg", "")).strip().upper() == "C100"]
     if not c100s:
         return None
 
@@ -24,11 +43,11 @@ def montar_c100_entrada_relevante_agg(
     anchor_registro_id: Optional[int] = None
 
     for r in c100s:
-        dados = (r.conteudo_json or {}).get("dados") or []
+        dados = _dados_any(r)
         if len(dados) < 11:
             continue
 
-        ind_oper = str(dados[1] or "").strip()
+        ind_oper = str(dados[0] or "").strip()  # ✅ IND_OPER é o primeiro campo após REG
         if ind_oper != "0":
             continue
 
@@ -37,17 +56,10 @@ def montar_c100_entrada_relevante_agg(
         if (vl_doc_raw is None or str(vl_doc_raw).strip() == "") and len(dados) > 14:
             vl_doc_raw = dados[14]
 
-        # parse simples (mantém string; regra parseia com dec_br)
-        try:
-            vl_doc_num = str(vl_doc_raw or "").strip()
-        except Exception:
-            vl_doc_num = ""
-
+        vl_doc_num = str(vl_doc_raw or "").strip()
         if not vl_doc_num:
             continue
 
-        # aqui não converte Decimal pra não depender de helper; a regra converte
-        # mas dá pra filtrar “min” com um parse rápido:
         try:
             v = Decimal(vl_doc_num.replace(".", "").replace(",", "."))
         except Exception:
@@ -57,7 +69,11 @@ def montar_c100_entrada_relevante_agg(
             continue
 
         linha_r = int(getattr(r, "linha", 0) or 0)
-        rid = int(getattr(r, "id", 0) or 0)
+
+        # ✅ aqui é importante: rows_like pode ter registro_id “real” e id “fake”
+        rid = int(getattr(r, "registro_id", 0) or 0)
+        if rid <= 0:
+            rid = int(getattr(r, "id", 0) or 0)
 
         if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
             anchor_linha = linha_r
@@ -84,7 +100,6 @@ def montar_c100_entrada_relevante_agg(
     if not itens or not anchor_linha:
         return None
 
-    # ordena por vl_doc desc
     def _v(it: Dict[str, Any]) -> Decimal:
         try:
             return Decimal(str(it.get("vl_doc") or "").replace(".", "").replace(",", "."))
@@ -107,7 +122,7 @@ def montar_c100_entrada_relevante_agg(
     dados_final: List[Any] = [{"_meta": meta}] + itens_sorted[:top_n]
 
     return RegistroFiscalDTO(
-        id=0,
+        id=int(anchor_registro_id or 0) or 0,  # ✅ melhor do que id=0
         reg="C100_ENT_AGG",
         linha=int(anchor_linha),
         dados=dados_final,

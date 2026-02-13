@@ -11,6 +11,7 @@ def carregar_linhas_logicas_com_revisoes(
     versao_origem_id: int,
     versao_final_id: int | None = None,
 ) -> list[LinhaLogica]:
+    print("LOADER EXECUTANDO", "origem=", versao_origem_id, "final=", versao_final_id, flush=True)
 
     # 1) Base: registros da versão origem
     regs = (
@@ -30,7 +31,7 @@ def carregar_linhas_logicas_com_revisoes(
     # 2) Busca revisões
     q = (
         db.query(EfdRevisao)
-        .filter(EfdRevisao.acao == "REPLACE_LINE")
+        .filter(EfdRevisao.acao.in_(["REPLACE_LINE", "DELETE"]))
     )
 
     if versao_final_id is not None:
@@ -47,21 +48,35 @@ def carregar_linhas_logicas_com_revisoes(
     revisoes_dict: list[dict] = []
 
     for rv in revisoes_db:
+        acao = str(getattr(rv, "acao", "") or "").upper()
         j = getattr(rv, "revisao_json", None) or {}
-        linha_txt = str((j.get("linha_nova") or "")).strip()
-        if not linha_txt:
-            continue
 
+        rid = int(getattr(rv, "registro_id", 0) or 0)
         linha_ref = int((j.get("linha_referencia") or j.get("linha_num") or 0) or 0)
 
-        revisoes_dict.append({
-            "id": int(rv.id),
-            "registro_id": int(rv.registro_id or 0),
-            "linha_num": linha_ref,
-            "acao": "REPLACE_LINE",
-            "linha": linha_txt,  # ✅ sempre linha_nova
-            "revisao_json": j,
-        })
+        if acao == "DELETE":
+            revisoes_dict.append({
+                "id": int(rv.id),
+                "registro_id": rid,
+                "linha_num": linha_ref,
+                "acao": "DELETE",
+                "revisao_json": j,
+            })
+            continue
+
+        if acao == "REPLACE_LINE":
+            linha_txt = str((j.get("linha_nova") or "")).strip()
+            if not linha_txt:
+                continue
+            revisoes_dict.append({
+                "id": int(rv.id),
+                "registro_id": rid,
+                "linha_num": linha_ref,
+                "acao": "REPLACE_LINE",
+                "linha": linha_txt,  # ✅ sempre linha_nova
+                "revisao_json": j,
+            })
+            continue
 
     # 4) 🔥 APLICA OVERLAY
     linhas_finais = aplicar_revisoes_replace_line(
@@ -85,6 +100,21 @@ def carregar_linhas_logicas_com_revisoes(
             "cst_pis=", ex.dados[23] if len(ex.dados) > 23 else None,
             "cst_cof=", ex.dados[29] if len(ex.dados) > 29 else None,
         )
+        # DEBUG focado: confirmar vencedora do registro 1025
+        rid_debug = 1025
+        x = next((l for l in linhas_finais if int(getattr(l, "registro_id", 0) or 0) == rid_debug), None)
+        if x:
+            cst_pis = x.dados[23] if len(x.dados) > 23 else None
+            cst_cof = x.dados[29] if len(x.dados) > 29 else None
+            print(
+                "LOADER> DEBUG rid=1025",
+                "origem=", getattr(x, "origem", None),
+                "revisao_id=", getattr(x, "revisao_id", None),
+                "cst_pis=", cst_pis,
+                "cst_cof=", cst_cof,
+            )
+        else:
+            print("LOADER> DEBUG rid=1025 nao encontrado")
 
     # 5) RETURN FINAL
     return linhas_finais

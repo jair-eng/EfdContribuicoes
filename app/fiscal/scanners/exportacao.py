@@ -1,11 +1,13 @@
 from typing import Sequence, List, Dict, Any, Optional, Tuple
 from app.db.models import EfdRegistro
+from app.fiscal.contexto import match_prefix_star, digits_only
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal
-from app.sped.utils_geral import dec_br, pick_cod_item_c170, get_registro_id
+
+from app.fiscal.regras.base_regras import RegraBase
+from app.sped.utils_geral import dec_br, pick_cod_item_c170, get_registro_id, _detectar_indicio_agro_0200
 
 import logging
-
 from app.sped.utils_geral import _detectar_indicio_cafe_0200
 
 logger = logging.getLogger(__name__)
@@ -98,42 +100,71 @@ def coletar_creditos_bloco_m(registros_db):
         "credito_cofins": str(cred_cof),
     }
 
-def detectar_perfil_monofasico(registros_db: Sequence["EfdRegistro"]) -> Tuple[bool, int]:
+def detectar_perfil_monofasico(
+    registros_db: Sequence["EfdRegistro"],
+    *,
+    catalogo: Optional[Any] = None,
+    debug: bool = False,
+) -> Tuple[bool, int]:
     """
     Detecta perfil monofásico (posto/combustíveis) por evidências combinadas.
     Retorna (bool, score 0-100).
 
-    Evidências:
-      A) 0200/NCM (forte)
-      B) C170/CFOP típicos de posto (médio)
-      C) 0200/descrição contendo palavras de combustível (médio)
+    Se catalogo vier, tenta usar slugs:
+      - NCM_COMBUSTIVEIS_MONO (ex: 2710*, 2711*, 2207*, 3826*)
+      - CFOP_COMBUSTIVEIS_ENTRADA (ex: 1403, 1652, 2652, 3652 etc.)
+    Se catalogo não vier, cai no fallback antigo (hardcoded).
     """
     score = 0
 
-    # A) 0200 - NCM forte
+    # tenta puxar listas do catálogo (se existir)
+    ncm_tokens = None
+    cfop_tokens = None
+
+    if catalogo is not None:
+        try:
+            # adapte se seu CatalogoFiscal tiver outro formato.
+            # aqui assumo algo como: catalogo.get_itens(slug) -> set[str]
+            ncm_tokens = set(catalogo.get_itens("NCM_COMBUSTIVEIS_MONO") or [])
+            cfop_tokens = set(catalogo.get_itens("CFOP_COMBUSTIVEIS_ENTRADA") or [])
+        except Exception:
+            ncm_tokens = None
+            cfop_tokens = None
+
+    # fallback hardcoded (se catálogo não fornecer)
+    if not ncm_tokens:
+        ncm_tokens = {"2710*", "2711*", "2207*", "3826*"}
+    if not cfop_tokens:
+        cfop_tokens = {"1652", "1403"}  # seu fallback original
+
+    # -------------------------
+    # A) 0200 - NCM forte + descrição
+    # -------------------------
     ncm_hits = 0
+
     for r in registros_db:
         if (r.reg or "").strip() != "0200":
             continue
         dados = (r.conteudo_json or {}).get("dados") or []
 
-        # tenta posição clássica 7, mas faz fallback procurando um campo com 8 dígitos
+        # NCM padrão: idx 6 (seu scanner montou via 6); mas aqui fica defensivo
         ncm = ""
-        if len(dados) > 7:
-            ncm = str(dados[7] or "").strip()
+        if len(dados) > 6:
+            ncm = digits_only(str(dados[6] or ""))
         if not ncm:
+            # fallback procurando 8 dígitos
             for v in dados:
-                vv = str(v or "").strip()
-                if vv.isdigit() and len(vv) in (8, 10):
+                vv = digits_only(str(v or ""))
+                if len(vv) >= 8:
                     ncm = vv[:8]
                     break
 
-        if ncm.startswith(("2710", "2711", "2207")):
+        if ncm and any(match_prefix_star(tok, ncm) for tok in ncm_tokens):
             ncm_hits += 1
 
-        # C) descrição
+        # descrição (seu critério antigo)
         desc = str(dados[1] or "").strip().upper() if len(dados) > 1 else ""
-        if desc and any(k in desc for k in ("GASOL", "DIESEL", "ETANOL", "ALCOOL", "COMBUST", "GNV")):
+        if desc and any(k in desc for k in ("GASOL", "DIESEL", "ETANOL", "ALCOOL", "COMBUST", "GNV", "GLP", "Biodiesel".upper())):
             score += 10
 
     if ncm_hits >= 1:
@@ -141,20 +172,22 @@ def detectar_perfil_monofasico(registros_db: Sequence["EfdRegistro"]) -> Tuple[b
     if ncm_hits >= 2:
         score += 20  # bônus
 
-    # B) CFOP típico (posto costuma ter muitas entradas 1652/1403)
+    # -------------------------
+    # B) CFOP típico (C170/C190)
+    # -------------------------
     cfop_hits = 0
     for r in registros_db:
         reg = (r.reg or "").strip()
+        dados = (r.conteudo_json or {}).get("dados") or []
+
+        cfop = ""
         if reg == "C170":
-            dados = (r.conteudo_json or {}).get("dados") or []
             cfop = str(dados[9] or "").strip() if len(dados) > 9 else ""
-            if cfop in ("1652", "1403"):
-                cfop_hits += 1
         elif reg == "C190":
-            dados = (r.conteudo_json or {}).get("dados") or []
             cfop = str(dados[1] or "").strip() if len(dados) > 1 else ""
-            if cfop in ("1652", "1403"):
-                cfop_hits += 1
+
+        if cfop and cfop in cfop_tokens:
+            cfop_hits += 1
 
     if cfop_hits >= 5:
         score += 35
@@ -164,7 +197,12 @@ def detectar_perfil_monofasico(registros_db: Sequence["EfdRegistro"]) -> Tuple[b
         score += 10
 
     score = min(100, int(score))
-    return (score >= 60), score
+    ok = (score >= 60)
+
+    if debug:
+        print("[MONO] ncm_hits=", ncm_hits, "cfop_hits=", cfop_hits, "score=", score, "ok=", ok, flush=True)
+
+    return ok, score
 
 def montar_c190_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
     # flags bloco 1 (ressarcimento)
@@ -295,7 +333,12 @@ def montar_c170_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         dados=dados_final,
     )
 
-def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+def montar_meta_fiscal(
+    registros_db: Sequence[EfdRegistro],
+    *,
+    catalogo=None,
+    debug: bool = False,
+) -> Optional[RegistroFiscalDTO]:
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
     flags: Dict[str, Any] = {
         "tem_1200": "1200" in regs_presentes,
@@ -309,12 +352,15 @@ def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[Registro
     # créditos (PIS/COF)
     flags.update(coletar_creditos_bloco_m(registros_db))
 
-    # perfil monofásico
-    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+    # perfil monofásico (agora catálogo-driven quando disponível)
+    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(
+        registros_db,
+        catalogo=catalogo,
+        debug=debug,
+    )
     flags["perfil_monofasico"] = perfil_monofasico
     flags["score_monofasico"] = score_monofasico
 
-    # ancora: menor id só pra ter registro_id estável
     anchor = min(registros_db, key=lambda r: int(r.id), default=None)
     if anchor is None:
         return None
@@ -325,6 +371,7 @@ def montar_meta_fiscal(registros_db: Sequence[EfdRegistro]) -> Optional[Registro
         linha=int(anchor.linha or 1),
         dados=[{"_meta": flags}],
     )
+
 
 def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
 
@@ -426,16 +473,26 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
 
 
 def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
-    map_item_desc = {}
+
+    map_item_desc: dict[str, str] = {}
+    map_item_ncm: dict[str, str] = {}
+
     for r in registros_db:
         if (r.reg or "").strip() != "0200":
             continue
         d = (r.conteudo_json or {}).get("dados") or []
-        if len(d) >= 2:
-            cod = str(d[0] or "").strip()
-            desc = str(d[1] or "").strip()
-            if cod and desc:
+        # d[0]=COD_ITEM, d[1]=DESCR_ITEM, d[6]=COD_NCM (layout padrão)
+        cod = str(d[0] or "").strip() if len(d) > 0 else ""
+        desc = str(d[1] or "").strip() if len(d) > 1 else ""
+        ncm_raw = str(d[6] or "").strip() if len(d) > 6 else ""
+        ncm = "".join(ch for ch in ncm_raw if ch.isdigit())
+
+        if cod:
+            if desc:
                 map_item_desc[cod] = desc
+            if ncm:
+                map_item_ncm[cod] = ncm
+
     # ---------------------------------------------------------
     # 1) Identificação rápida dos registros presentes
     # ---------------------------------------------------------
@@ -476,24 +533,16 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
 
         vl_item = dados[5] if len(dados) > 5 else "0"
 
-        # ✅ tenta capturar NCM de forma resiliente (índices comuns do C170)
-        # (se você souber o índice exato no seu parser, a gente fixa depois)
-        ncm = ""
-        for idx in (12, 11, 13, 10):
-            if len(dados) > idx:
-                cand = str(dados[idx] or "").strip()
-                cand = cand.replace(".", "")
-                if cand and cand.isdigit() and len(cand) >= 4:
-                    ncm = cand
-                    break
-
-        # ✅ COD_ITEM
+        # COD_ITEM (no seu projeto, normalmente é dados[1])
         cod_item = pick_cod_item_c170(dados)
+
+        # NCM vem do 0200 (catálogo de itens)
+        ncm = map_item_ncm.get(cod_item, "") if cod_item else ""
+        descricao = map_item_desc.get(cod_item, "") if cod_item else ""
 
         linha_r = int(getattr(r, "linha", 0) or 0)
         if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
             anchor_linha = linha_r
-        descricao = map_item_desc.get(cod_item, "")
 
         # ✅ ID real do registro (única fonte de verdade)
         rid_real = int(getattr(r, "id", 0) or 0)
@@ -538,7 +587,8 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     flags["anchor_reg_base"] = "C170"
     flags["anchor_linha"] = anchor_linha
     flags.setdefault("anchor_registro_id", None)
-    flags["tem_indicio_cafe"] = _detectar_indicio_cafe_0200(registros_db)
+    flags["tem_indicio_agro"] = _detectar_indicio_agro_0200(registros_db)
+
 
     dados_final: List[Any] = [{"_meta": flags}] + itens
 

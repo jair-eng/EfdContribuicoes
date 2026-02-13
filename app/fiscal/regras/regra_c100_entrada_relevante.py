@@ -7,7 +7,6 @@ from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.regras.achado import Achado
 from app.fiscal.regras.base_regras import RegraBase
 
-
 class RegraC100EntradaRelevante(RegraBase):
     codigo = "C100-ENT"
     nome = "Resumo: entradas relevantes (C100) para revisão"
@@ -15,31 +14,60 @@ class RegraC100EntradaRelevante(RegraBase):
     VL_DOC_MIN = Decimal("50000")
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
-        # ✅ agora só no agregado
+
         if (registro.reg or "").strip().upper() != "C100_ENT_AGG":
             return None
-
         if getattr(registro, "is_pf", False):
             return None
 
-        raw: List[Any] = registro.dados or []
-        if not raw or not isinstance(raw[0], dict):
+        raw = registro.dados
+
+        # ✅ aceita LISTA (formato antigo) OU DICT (formato novo)
+        meta = {}
+        itens = []
+
+        if isinstance(raw, list):
+            if not raw:
+                return None
+            # formato A: [ {"_meta":...}, {...}, {...} ]
+            if isinstance(raw[0], dict) and "_meta" in raw[0]:
+                meta = raw[0].get("_meta") or {}
+                itens = raw[1:]
+            # formato B: [ {...}, {...} ] (sem _meta)
+            else:
+                meta = {}
+                itens = raw
+
+        elif isinstance(raw, dict):
+            # formato C: {"_meta":..., "itens":[...]}
+            meta = raw.get("_meta") or {}
+            itens = raw.get("itens") or raw.get("items") or []
+        else:
             return None
 
-        meta = raw[0].get("_meta") or {}
-        itens = raw[1:]
         if not itens:
             return None
 
-        # soma e top
         total_vl = Decimal("0")
         top = []
+
         for it in itens:
             if not isinstance(it, dict):
                 continue
-            v = self.dec_br(it.get("vl_doc")) or Decimal("0")
+
+            v = self.dec_br(it.get("vl_doc"))
+            if v is None:
+                # fallback: tenta dec_any se vier Decimal/float/int
+                v = self.dec_any(it.get("vl_doc"))
+
+            v = v or Decimal("0")
             if v <= 0:
                 continue
+
+            # ✅ aplica o piso aqui também (se o agregador não filtrou)
+            if v < self.VL_DOC_MIN:
+                continue
+
             total_vl += v
             top.append((v, it))
 
@@ -48,7 +76,6 @@ class RegraC100EntradaRelevante(RegraBase):
 
         impacto = self.q2(total_vl * ALIQUOTA_TOTAL)
 
-        # âncora real pra FK
         rid = int(getattr(registro, "id", 0) or 0)
         anchor_rid = meta.get("anchor_registro_id")
         try:
@@ -60,14 +87,11 @@ class RegraC100EntradaRelevante(RegraBase):
         qtd_total = int(meta.get("qtd_total") or len(top))
         top_n = int(meta.get("top_n") or 30)
 
-        # monta descrição com 3 maiores
         top_sorted = sorted(top, key=lambda x: x[0], reverse=True)[:3]
-        parts = []
-        for v, it in top_sorted:
-            parts.append(
-                f"R$ {self.fmt_br(self.q2(v))} (Mod={it.get('modelo') or '-'} Série={it.get('serie') or '-'} Nº={it.get('num_doc') or '-'})"
-            )
-        exemplos = "; ".join(parts) if parts else "-"
+        exemplos = "; ".join(
+            f"R$ {self.fmt_br(self.q2(v))} (Mod={it.get('modelo') or '-'} Série={it.get('serie') or '-'} Nº={it.get('num_doc') or '-'})"
+            for v, it in top_sorted
+        ) or "-"
 
         return Achado(
             registro_id=int(registro_id_final),

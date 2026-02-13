@@ -4,11 +4,17 @@ from collections import defaultdict
 from typing import Sequence
 from app.db.models import EfdRegistro
 from app.fiscal.settings_fiscais import CSTS_RECEITA_NCUM, CSTS_RECEITA_M
+from collections import Counter
 import re
 
 REGS_RECEITA_BLOCO_C = {"C170", "C175", "C185", "C385", "C485", "C495", "C605", "C870", "C880"}
 
 _RX_CAFE = re.compile(r"\bCAF[ÉE]\b|\bCAFE\b", re.IGNORECASE)
+_RX_GRAOS = re.compile(
+    r"\bSOJA\b|\bMILHO\b|\bTRIGO\b|\bSORGO\b|\bGRAO[S]?\b|\bGR[AÃ]O[S]?\b|\bFARELO\b",
+    re.IGNORECASE,
+)
+
 _RX_NUM_BR = re.compile(r"^\d{1,3}(\.\d{3})*,\d+$|^\d+,\d+$|^\d+$")
 
 def get_registro_id(r) -> int:
@@ -58,13 +64,26 @@ def _parece_cod_item(s: str) -> bool:
     return True
 
 def pick_cod_item_c170(dados: list) -> str:
-    # candidatos típicos (mas variáveis conforme seu parser)
-    for idx in (2, 3, 1, 0):
+    """
+    No seu parser atual (EFD Contribuições), COD_ITEM está em dados[1].
+    Mantém fallback apenas por segurança.
+    """
+    try:
+        cand = str(dados[1] or "").strip() if len(dados) > 1 else ""
+        if cand:
+            return cand
+    except Exception:
+        pass
+
+    # fallback: tenta outros índices (caso algum layout/parse mude)
+    for idx in (2, 3, 0):
         if len(dados) > idx:
             cand = str(dados[idx] or "").strip()
-            if _parece_cod_item(cand):
+            if cand:
                 return cand
+
     return ""
+
 
 def dec_br(v) -> Decimal:
     s = str(v or "").strip()
@@ -84,6 +103,45 @@ def _norm_ncm(x) -> str:
     s = str(x or "").strip().replace(".", "")
     return s
 
+def _is_cafe_ou_graos(desc: str, ncm: str) -> bool:
+    """
+    Heurística V1: detecta café ou grãos (commodities agrícolas) por NCM e/ou descrição.
+    - Café: NCM 0901 ou descrição com CAFE/CAFÉ
+    - Grãos: keywords fortes (SOJA/MILHO/TRIGO/etc.) e NCMs básicos (soja/milho/trigo)
+    """
+    d = (desc or "").strip()
+    n = (ncm or "").replace(".", "").strip()
+
+    # café (mantém o padrão atual)
+    if n.startswith("0901"):
+        return True
+    if d and _RX_CAFE.search(d):
+        return True
+
+    # grãos por descrição (forte)
+    if d and _RX_GRAOS.search(d):
+        return True
+
+    # grãos por NCM (V1 básico, pode ampliar depois)
+    # trigo 1001, milho 1005, soja 1201
+    if n.startswith(("1001", "1005", "1201")):
+        return True
+
+    return False
+
+def _is_graos_by_desc(desc: str) -> bool:
+    return bool(desc) and bool(_RX_GRAOS.search(desc))
+
+def _is_commodity_agro_by_ncm(ncm: str) -> bool:
+    n = (ncm or "").replace(".", "").strip()
+    if not n:
+        return False
+    # V1: café e alguns grãos “óbvios” (pode ir ampliando depois)
+    return n.startswith(("0901", "1001", "1005", "1201"))  # café, trigo, milho, soja
+
+def _is_commodity_agro(desc: str, ncm: str) -> bool:
+    return _is_cafe_by_ncm(ncm) or _is_cafe_by_desc(desc) or _is_commodity_agro_by_ncm(ncm) or _is_graos_by_desc(desc)
+
 def _is_cafe_by_ncm(ncm: str) -> bool:
     # 0901 = café (grão/torrado/descafeinado etc.)
     return bool(ncm) and ncm.startswith("0901")
@@ -99,16 +157,43 @@ def _item_parece_cafe(it: dict) -> tuple[bool, bool]:
     if not tem_info:
         return (False, False)
 
-    if ncm.startswith("0901"):
+    if _is_cafe_ou_graos(desc, ncm):
         return (True, True)
 
-    # ✅ fallback forte: descrição contém CAFÉ/CAFE
-    if desc and _RX_CAFE.search(desc):
-        return (True, True)
-
+    # tem info mas não confirmou commodity
     return (True, False)
 
+
 def _detectar_indicio_cafe_0200(registros_db: Sequence[EfdRegistro]) -> bool:
+    for rr in registros_db:
+        if (rr.reg or "").strip() != "0200":
+            continue
+
+        d = (rr.conteudo_json or {}).get("dados") or []
+        if len(d) < 2:
+            continue
+
+        desc = str(d[1] or "").upper()
+
+        # ✅ CAFÉ
+        if _RX_CAFE.search(desc):
+            return True
+
+        # ✅ GRÃOS (novo)
+        if _RX_GRAOS.search(desc):
+            return True
+
+        # ✅ NCM (resiliente: tenta índices comuns)
+        for idx in (6, 7):
+            if len(d) > idx:
+                ncm = str(d[idx] or "").replace(".", "").strip()
+                if ncm.startswith("0901"):  # café
+                    return True
+                # (NCMs de grãos podem ser adicionados depois, sem pressa)
+
+    return False
+
+def _detectar_indicio_agro_0200(registros_db) -> bool:
     for rr in registros_db:
         if (rr.reg or "").strip() != "0200":
             continue
@@ -116,16 +201,15 @@ def _detectar_indicio_cafe_0200(registros_db: Sequence[EfdRegistro]) -> bool:
         if len(d) < 2:
             continue
 
-        desc = str(d[1] or "").upper()
-        if "CAFE" in desc or "CAFÉ" in desc:
+        desc = str(d[1] or "").strip()
+        if _RX_CAFE.search(desc) or _RX_GRAOS.search(desc):
             return True
 
-        # se 0200 tiver NCM (muitas vezes índice 6)
-        if len(d) > 6:
-            ncm = str(d[6] or "").replace(".", "").strip()
-            if ncm.startswith("0901"):
+        # NCM (no teu 0200 é índice 7)
+        if len(d) > 7:
+            ncm = str(d[7] or "").replace(".", "").strip()
+            if ncm.startswith("0901") or ncm.startswith(("1001","1005","1006","1007","1201")):
                 return True
-
     return False
 
 def q2(v) -> Decimal:
@@ -253,3 +337,134 @@ def calcular_totais_0900(linhas_sped: List[str]) -> Dict[str, Decimal]:
         "total_periodo": total_periodo,
         "nrb_periodo": nrb_periodo,
     }
+
+
+
+def consolidar_achados_c170_insumo_v2(result) -> None:
+    alvo = "C170_INSUMO_V2"
+
+    achados = [a for a in result.apontamentos
+               if str(getattr(a, "codigo", "")).strip() == alvo
+               and str(getattr(a, "tipo", "")).strip() == "OPORTUNIDADE"]
+
+    if len(achados) <= 1:
+        return
+
+    def prio_rank(p: str) -> int:
+        p = (p or "").upper()
+        return {"ALTA": 3, "MEDIA": 2, "BAIXA": 1}.get(p, 0)
+
+    def dec_br(x) -> Decimal:
+        try:
+            if x is None:
+                return Decimal("0")
+            if isinstance(x, (int, float, Decimal)):
+                return Decimal(str(x))
+            s = str(x).strip().replace(".", "").replace(",", ".")
+            return Decimal(s) if s else Decimal("0")
+        except Exception:
+            return Decimal("0")
+
+    def get_valores(a) -> dict:
+        meta = getattr(a, "meta", None) or {}
+        return (meta.get("valores") or {}) if isinstance(meta, dict) else {}
+
+    def get_vl_item(a) -> Decimal:
+        valores = get_valores(a)
+        return dec_br(valores.get("vl_item"))
+
+    def get_linha(a) -> int:
+        meta = getattr(a, "meta", None) or {}
+        if isinstance(meta, dict):
+            v = meta.get("linha") or meta.get("linha_num") or meta.get("linha_referencia")
+            try:
+                return int(v)
+            except Exception:
+                pass
+        # fallback: tenta inferir do registro se quiser (mas não depende)
+        return 10**18
+
+    # escolhe âncora: maior prioridade, maior vl_item, menor linha, menor registro_id
+    achados_sorted = sorted(
+        achados,
+        key=lambda a: (
+            -prio_rank(getattr(a, "prioridade", None)),
+            -get_vl_item(a),
+            get_linha(a),
+            int(getattr(a, "registro_id", 0) or 0),
+        )
+    )
+    anchor = achados_sorted[0]
+
+    # agrega estatísticas + amostras
+    soma_vl_item = sum((get_vl_item(a) for a in achados_sorted), Decimal("0"))
+
+    cfops = Counter()
+    ncms = Counter()
+    csts = Counter()
+    amostras = []
+
+    MAX_AMOSTRAS = 30
+    for a in achados_sorted:
+        valores = get_valores(a)
+        cfop = str(valores.get("cfop") or "").strip()
+        ncm = str(valores.get("ncm") or "").strip()
+        cst_pis = str(valores.get("cst_pis") or "").strip()
+        cst_cof = str(valores.get("cst_cof") or "").strip()
+
+        if cfop: cfops[cfop] += 1
+        if ncm: ncms[ncm] += 1
+        if cst_pis: csts[f"PIS:{cst_pis}"] += 1
+        if cst_cof: csts[f"COF:{cst_cof}"] += 1
+
+        if len(amostras) < MAX_AMOSTRAS:
+            amostras.append({
+                "registro_id": int(getattr(a, "registro_id", 0) or 0),
+                "linha": get_linha(a),
+                "prioridade": getattr(a, "prioridade", None),
+                "cfop": cfop or None,
+                "cst_pis": cst_pis or None,
+                "cst_cof": cst_cof or None,
+                "ncm": ncm or None,
+                "vl_item": str(get_vl_item(a)),
+            })
+
+    def top(counter: Counter, n: int):
+        return [k for k, _ in counter.most_common(n)]
+
+    # injeta meta.sum na âncora
+    meta = getattr(anchor, "meta", None) or {}
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    meta["sum"] = {
+        "qtd_itens": int(len(achados_sorted)),
+        "soma_vl_item": str(soma_vl_item.quantize(Decimal("0.01"))),
+        "top_cfop": top(cfops, 5),
+        "top_ncm": top(ncms, 5),
+        "top_cst": top(csts, 6),
+        "amostras": amostras,
+    }
+    anchor.meta = meta  # Achado costuma aceitar .meta
+
+    # melhora a descrição do “1 único”
+    anchor.descricao = (
+        f"C170 (insumos): {len(achados_sorted)} item(ns) com CFOP de entrada e CST sem crédito (catálogo). "
+        f"Soma VL_ITEM≈ {soma_vl_item.quantize(Decimal('0.01'))}. "
+        f"Top CFOP: {', '.join(top(cfops, 5)) or 'N/D'}. "
+        f"Top NCM: {', '.join(top(ncms, 5)) or 'N/D'}."
+    )
+
+    # remove duplicados deixando só a âncora
+    keep_id = id(anchor)
+    nova = []
+    removed = 0
+    for a in result.apontamentos:
+        if str(getattr(a, "codigo", "")).strip() == alvo and str(getattr(a, "tipo", "")).strip() == "OPORTUNIDADE":
+            if id(a) == keep_id:
+                nova.append(a)
+            else:
+                removed += 1
+            continue
+        nova.append(a)
+
+    result.apontamentos = nova
+    print(f"[SCAN] CONSOLIDADO {alvo}: removidos={removed} mantido=1", flush=True)

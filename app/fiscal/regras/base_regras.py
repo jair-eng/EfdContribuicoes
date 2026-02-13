@@ -114,6 +114,15 @@ class RegraBase(ABC):
         return f"{d:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     @staticmethod
+    def parse_int(value) -> Optional[int]:
+        try:
+            if value is None or isinstance(value, bool):
+                return None
+            return int(str(value).strip())
+        except Exception:
+            return None
+
+    @staticmethod
     def q2(d: Decimal | None) -> Decimal:
         d = d if isinstance(d, Decimal) else Decimal(str(d or "0"))
         return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -173,7 +182,16 @@ class RegraBase(ABC):
 
         cat = carregar_catalogo_fiscal(db, empresa_id=empresa_id)
         cls._CATALOGO_CACHE[empresa_id] = (now, cat)
+        print("CATALOGO LOAD empresa_id=", empresa_id, "cache_hit=", bool(hit))
+
         return cat
+
+    @classmethod
+    def ncm_match(cls, cat: CatalogoFiscal, slug: str, ncm: str) -> bool:
+        try:
+            return bool(cat) and bool(slug) and cat.ncm_match(slug, ncm)
+        except Exception:
+            return False
 
     @staticmethod
     def cfop_match(cat: CatalogoFiscal, slug: str, cfop: str) -> bool:
