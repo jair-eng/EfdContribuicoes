@@ -21,6 +21,9 @@ def carregar_linhas_logicas_com_revisoes(
         .all()
     )
 
+    rid_to_pai: dict[int, int] = {int(r.id): int(getattr(r, "pai_id", 0) or 0) for r in regs}
+    rid_to_reg: dict[int, str] = {int(r.id): str(getattr(r, "reg", "") or "").strip() for r in regs}
+
     linhas_originais: list[LinhaLogica] = [
         LinhaLogica.from_efd_registro(r) for r in regs
     ]
@@ -115,6 +118,21 @@ def carregar_linhas_logicas_com_revisoes(
             )
         else:
             print("LOADER> DEBUG rid=1025 nao encontrado")
+
+    # ✅ Enriquecer linhas com pai_id do DB (mantém hierarquia no overlay)
+    for l in linhas_finais:
+        try:
+            rid = int(getattr(l, "registro_id", 0) or 0)
+            if rid > 0:
+                pai = int(rid_to_pai.get(rid, 0) or 0)
+                if pai > 0:
+                    setattr(l, "pai_id", pai)
+
+                # opcional: garantir reg coerente, se precisar
+                if not getattr(l, "reg", None):
+                    setattr(l, "reg", rid_to_reg.get(rid, ""))
+        except Exception:
+            pass
 
     # 5) RETURN FINAL
     return linhas_finais

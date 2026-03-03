@@ -176,7 +176,9 @@ def _parse_linha_sped_to_reg_dados(linha: str) -> Tuple[str, List[Any]]:
 
 @dataclass
 class RegistroLike:
-    id: Optional[int]
+    id: int
+    registro_id: int
+    pai_id: int
     reg: str
     linha: int
     conteudo_json: dict
@@ -185,9 +187,13 @@ class RegistroLike:
 def linhas_para_rows_like(linhas) -> List[RegistroLike]:
     out: List[RegistroLike] = []
     for l in linhas:
+        rid = int(getattr(l, "registro_id", 0) or 0)
+        pid = int(getattr(l, "pai_id", 0) or 0)
         out.append(
             RegistroLike(
-                id=0,
+                id=rid,                         # ✅
+                registro_id=rid,                 # ✅ (se existir no RegistroLike)
+                pai_id=pid,                      # ✅ (se existir no RegistroLike)
                 reg=str(l.reg),
                 linha=int(l.linha),
                 conteudo_json={"dados": list(l.dados or [])},

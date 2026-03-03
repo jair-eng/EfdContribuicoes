@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+
+from app.fiscal.constants import DOMINIOS_VALIDOS, DOM_GERAL
 from app.sped.parser import parse_sped_preview, parse_sped_full
 from app.db.models import Empresa, EfdArquivo, EfdVersao, EfdRegistro
 
@@ -95,6 +97,7 @@ class UploadConfirmService:
         *,
         temp_id: str,
         nome_arquivo: Optional[str] = None,
+        dominio: str | None = None,
         batch_size: int = 5000,
     ) -> Dict[str, Any]:
 
@@ -114,6 +117,10 @@ class UploadConfirmService:
         razao = (meta.get("razao_social") or "").strip() or None
 
         try:
+            dominio_payload = (dominio or "").strip().upper()
+
+            if dominio_payload and dominio_payload not in DOMINIOS_VALIDOS:
+                raise ValueError(f"dominio inválido: {dominio_payload}")
             # ------------------------------------------------------------
             # 1) EMPRESA  (🔥 correção definitiva do hash 🔥)
             # ------------------------------------------------------------
@@ -124,6 +131,7 @@ class UploadConfirmService:
                 empresa = Empresa(
                     cnpj=cnpj_limpo,
                     razao_social=razao if _nome_valido(razao) else None,
+                    dominio=dominio_payload or DOM_GERAL,
                 )
                 db.add(empresa)
                 db.flush()
@@ -135,6 +143,11 @@ class UploadConfirmService:
                     or _parece_hash(empresa.razao_social)
                 ):
                     empresa.razao_social = razao
+                    db.add(empresa)
+                    db.flush()
+
+                if dominio_payload and (empresa.dominio or DOM_GERAL) == DOM_GERAL:
+                    empresa.dominio = dominio_payload
                     db.add(empresa)
                     db.flush()
 

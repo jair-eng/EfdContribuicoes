@@ -4,11 +4,10 @@ from app.fiscal.contexto import match_prefix_star, digits_only
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal
 
-from app.fiscal.regras.base_regras import RegraBase
-from app.sped.utils_geral import dec_br, pick_cod_item_c170, get_registro_id, _detectar_indicio_agro_0200
+from app.fiscal.regras.Autocorrigivel.shared import _detectar_producao_interna_super
+from app.sped.utils_geral import dec_br, pick_cod_item_c170, _detectar_indicio_agro_0200, _cfop_gate_entrada_compra
 
 import logging
-from app.sped.utils_geral import _detectar_indicio_cafe_0200
 
 logger = logging.getLogger(__name__)
 
@@ -412,8 +411,7 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
 
         cfop = str(dados[1] or "").strip()
 
-        # Entradas: 1xxx / 2xxx
-        if not (cfop and cfop[0] in ("1", "2")):
+        if not _cfop_gate_entrada_compra(cfop):
             continue
 
         vl_opr = dados[3]
@@ -469,8 +467,6 @@ def montar_c190_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         linha=anchor_linha,
         dados=dados_final,
     )
-
-
 
 def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
 
@@ -528,7 +524,7 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
             continue
 
         cfop = str(dados[9] or "").strip()
-        if not (cfop and cfop[0] in ("1", "2")):
+        if not _cfop_gate_entrada_compra(cfop):
             continue
 
         vl_item = dados[5] if len(dados) > 5 else "0"
@@ -603,4 +599,261 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         linha=anchor_linha,
         dados=dados_final,
         is_pf=False
+    )
+
+def montar_c170_insumo_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+    map_item_desc: dict[str, str] = {}
+    map_item_ncm: dict[str, str] = {}
+
+    # 0200 -> mapa COD_ITEM -> (DESC, NCM)
+    for r in registros_db:
+        if (r.reg or "").strip() != "0200":
+            continue
+        d = (r.conteudo_json or {}).get("dados") or []
+        cod = str(d[0] or "").strip() if len(d) > 0 else ""
+        desc = str(d[1] or "").strip() if len(d) > 1 else ""
+        ncm_raw = str(d[6] or "").strip() if len(d) > 6 else ""
+        ncm = "".join(ch for ch in ncm_raw if ch.isdigit())
+        if cod:
+            if desc:
+                map_item_desc[cod] = desc
+            if ncm:
+                map_item_ncm[cod] = ncm
+
+    regs_presentes = {(r.reg or "").strip() for r in registros_db}
+    flags: Dict[str, Any] = {
+        "tem_1200": "1200" in regs_presentes,
+        "tem_1210": "1210" in regs_presentes,
+        "tem_1700": "1700" in regs_presentes,
+    }
+    flags.update(coletar_flags_bloco_m(registros_db))
+
+    c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+    if not c170s:
+        return None
+
+    itens: List[Dict[str, Any]] = []
+    anchor_linha: Optional[int] = None
+
+    for r in c170s:
+        dados = (r.conteudo_json or {}).get("dados") or []
+        if len(dados) < 10:
+            continue
+
+        # CFOP entrada (1xxx/2xxx). (deixa a regra filtrar catálogo depois)
+        cfop = str(dados[9] or "").strip()
+        if not _cfop_gate_entrada_compra(cfop):
+            continue
+
+        # valores padrão do teu parser
+        vl_item = dados[5] if len(dados) > 5 else "0"
+        cst_pis = str(dados[23] or "").strip() if len(dados) > 23 else ""
+        cst_cof = str(dados[29] or "").strip() if len(dados) > 29 else ""
+
+        cod_item = pick_cod_item_c170(dados)
+        ncm = map_item_ncm.get(cod_item, "") if cod_item else ""
+        descricao = map_item_desc.get(cod_item, "") if cod_item else ""
+
+        linha_r = int(getattr(r, "linha", 0) or 0)
+        if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
+            anchor_linha = linha_r
+
+        rid_real = int(getattr(r, "id", 0) or 0) or int(getattr(r, "registro_id", 0) or 0)
+
+        # ancora no 1º registro real válido
+        if flags.get("anchor_registro_id") is None and rid_real > 0:
+            flags["anchor_registro_id"] = rid_real
+
+        itens.append({
+            "cfop": cfop,
+            "vl_item": vl_item,
+            "cst_pis": cst_pis,
+            "cst_cofins": cst_cof,
+            "ncm": ncm,
+            "descricao": descricao,
+            "cod_item": cod_item,
+            "registro_id": rid_real,
+            "pai_id": getattr(r, "pai_id", None),
+            "linha": linha_r,
+        })
+
+    if not itens or not anchor_linha:
+        return None
+
+    # indicadores / perfil (se você quiser manter consistência com os outros AGGs)
+    flags.update(coletar_creditos_bloco_m(registros_db))
+    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+    flags["perfil_monofasico"] = perfil_monofasico
+    flags["score_monofasico"] = score_monofasico
+
+    flags["fonte"] = "C170"
+    flags["anchor_reg_base"] = "C170"
+    flags["anchor_linha"] = anchor_linha
+    flags.setdefault("anchor_registro_id", None)
+
+    dados_final: List[Any] = [{"_meta": flags}] + itens
+    anchor_id = int(flags.get("anchor_registro_id") or 0)
+    if not anchor_id:
+        return None
+
+    return RegistroFiscalDTO(
+        id=anchor_id,
+        reg="C170_INSUMO_AGG",
+        linha=anchor_linha,
+        dados=dados_final,
+        is_pf=False
+    )
+
+def montar_c170_sup_entrada_agg(registros_db: Sequence[EfdRegistro], *, cat: Any) -> Optional[RegistroFiscalDTO]:
+    map_item_desc: dict[str, str] = {}
+    map_item_ncm: dict[str, str] = {}
+
+    for r in registros_db:
+        if (r.reg or "").strip() != "0200":
+            continue
+        d = (r.conteudo_json or {}).get("dados") or []
+        cod = str(d[0] or "").strip() if len(d) > 0 else ""
+        desc = str(d[1] or "").strip() if len(d) > 1 else ""
+        ncm_raw = str(d[6] or "").strip() if len(d) > 6 else ""
+        ncm = "".join(ch for ch in ncm_raw if ch.isdigit())
+        if cod:
+            if desc:
+                map_item_desc[cod] = desc
+            if ncm:
+                map_item_ncm[cod] = ncm
+
+    regs_presentes = {(r.reg or "").strip() for r in registros_db}
+    flags: Dict[str, Any] = {
+        "tem_1200": "1200" in regs_presentes,
+        "tem_1210": "1210" in regs_presentes,
+        "tem_1700": "1700" in regs_presentes,
+    }
+    flags.update(coletar_flags_bloco_m(registros_db))
+    flags.update(coletar_creditos_bloco_m(registros_db))
+
+    perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+    flags["perfil_monofasico"] = perfil_monofasico
+    flags["score_monofasico"] = score_monofasico
+
+    # ✅ contexto SUP (produção interna)
+    sup_ctx = _detectar_producao_interna_super(registros_db, cat)
+    flags.update({f"sup_{k}": v for k, v in sup_ctx.items()})
+
+    c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+    if not c170s:
+        return None
+
+    itens: List[Dict[str, Any]] = []
+    anchor_linha: Optional[int] = None
+
+    for r in c170s:
+        dados = (r.conteudo_json or {}).get("dados") or []
+        if len(dados) < 10:
+            continue
+
+        cfop = str(dados[9] or "").strip()
+        # ✅ entradas apenas (1xxx/2xxx)
+        if not _cfop_gate_entrada_compra(cfop):
+            continue
+
+        vl_item = dados[5] if len(dados) > 5 else "0"
+        cst_pis = str(dados[23] or "").strip() if len(dados) > 23 else ""
+        cst_cof = str(dados[29] or "").strip() if len(dados) > 29 else ""
+
+        cod_item = pick_cod_item_c170(dados)
+        ncm = map_item_ncm.get(cod_item, "") if cod_item else ""
+        descricao = map_item_desc.get(cod_item, "") if cod_item else ""
+
+        linha_r = int(getattr(r, "linha", 0) or 0)
+        if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
+            anchor_linha = linha_r
+
+        rid_real = int(getattr(r, "id", 0) or 0) or int(getattr(r, "registro_id", 0) or 0)
+        if flags.get("anchor_registro_id") is None and rid_real > 0:
+            flags["anchor_registro_id"] = rid_real
+
+        itens.append({
+            "cfop": cfop,
+            "vl_item": vl_item,
+            "cst_pis": cst_pis,
+            "cst_cofins": cst_cof,
+            "ncm": ncm,
+            "descricao": descricao,
+            "cod_item": cod_item,
+            "registro_id": rid_real,
+            "pai_id": getattr(r, "pai_id", None),
+            "linha": linha_r,
+        })
+
+    if not itens or not anchor_linha:
+        return None
+
+    flags["fonte"] = "C170"
+    flags["anchor_reg_base"] = "C170"
+    flags["anchor_linha"] = anchor_linha
+    flags.setdefault("anchor_registro_id", None)
+
+    dados_final: List[Any] = [{"_meta": flags}] + itens
+    anchor_id = int(flags.get("anchor_registro_id") or 0)
+    if not anchor_id:
+        return None
+    print("[SUP_AGG] sup_ctx=", sup_ctx)
+    print("[SUP_AGG] flags sup_tem_producao_interna=", flags.get("sup_tem_producao_interna"), "sup_producao_interna=",
+          flags.get("sup_producao_interna"))
+
+    return RegistroFiscalDTO(
+        id=anchor_id,
+        reg="C170_SUP_ENTRADA_AGG",
+        linha=anchor_linha,
+        dados=dados_final,
+        is_pf=False
+    )
+
+
+def montar_c170_saida_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
+    c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+    if not c170s:
+        return None
+
+    itens = []
+    anchor_linha = None
+    anchor_registro_id = None
+
+    for r in c170s:
+        dados = (r.conteudo_json or {}).get("dados") or []
+        if len(dados) < 10:
+            continue
+
+        cfop = str(dados[9] or "").strip()
+
+        # SAÍDAS
+        if not (cfop and cfop[0] in ("5", "6", "7")):
+            continue
+
+        # ICMS destacado (campo 12 no C170)
+        vl_icms = dados[12] if len(dados) > 12 else "0"
+
+        linha_r = int(getattr(r, "linha", 0) or 0)
+        rid = int(getattr(r, "id", 0) or 0)
+
+        if anchor_linha is None or linha_r < anchor_linha:
+            anchor_linha = linha_r
+            anchor_registro_id = rid
+
+
+        itens.append({
+            "cfop": cfop,
+            "vl_icms": vl_icms,
+            "linha": linha_r,
+            "registro_id": rid
+        })
+
+    if not itens or not anchor_linha:
+        return None
+
+    return RegistroFiscalDTO(
+        id=int(anchor_registro_id or 0),
+        reg="C170_SAIDA_AGG",
+        linha=anchor_linha,
+        dados=itens,
     )

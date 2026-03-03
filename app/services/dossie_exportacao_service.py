@@ -18,6 +18,7 @@ from docx import Document
 from docx.shared import Pt
 from docx.oxml.ns import qn
 
+from app.db.models import EfdRevisao
 # -------------------------
 # Projeto (utils)
 # -------------------------
@@ -75,7 +76,6 @@ LAYOUT_C170 = C170Layout()
 # -------------------------
 # DTO
 # -------------------------
-
 @dataclass(frozen=True)
 class DossieExportacaoDados:
     # Identificação
@@ -89,28 +89,39 @@ class DossieExportacaoDados:
     export_itens: int
     export_por_cfop: Dict[str, Decimal]
 
+    # ✅ Ajuste (AJUSTE_M) — rastreio (DB)
+    ajuste_tipo: Optional[str] = None
+    ajuste_base_exportacao: Decimal = Decimal("0.00")
+    ajuste_credito_extra_pis: Decimal = Decimal("0.00")
+    ajuste_credito_extra_cofins: Decimal = Decimal("0.00")
+    ajuste_credito_extra_total: Decimal = Decimal("0.00")
+    ajuste_origem: Optional[str] = None          # ex.: EXP_RESSARC_V1
+    ajuste_created_at: Optional[str] = None      # string formatada
+
     # Apuração (Bloco M) — pode não existir
-    tem_m100: bool
-    tem_m500: bool
-    base_credito_mes: Decimal
-    credito_pis: Decimal
-    credito_cofins: Decimal
-    credito_total: Decimal
-    aliq_pis_pct: str
-    aliq_cofins_pct: str
+    tem_m100: bool = False
+    tem_m500: bool = False
+    base_credito_mes: Decimal = Decimal("0.00")
+    credito_pis: Decimal = Decimal("0.00")
+    credito_cofins: Decimal = Decimal("0.00")
+    credito_total: Decimal = Decimal("0.00")
+    aliq_pis_pct: str = "—"
+    aliq_cofins_pct: str = "—"
 
     # Composição por CST (M105/M505)
-    csts: List[str]
-    base_por_cst: Dict[str, Decimal]
+    csts: List[str] = None
+    base_por_cst: Dict[str, Decimal] = None
 
     # Evidências e observações
-    bloco_m_linhas_evidencia: List[str]
-    observacoes: List[str]
+    bloco_m_linhas_evidencia: List[str] = None
+    observacoes: List[str] = None
+
+    # ✅ Evidências bloco 1 e 0900
+    linha_0900: Optional[str] = None
+    bloco_1_linhas_evidencia: List[str] = None
 
     # Fonte do TXT (para o DOCX)
-    fonte_txt_path: Path
-
-
+    fonte_txt_path: Path = None
 # -------------------------
 # Helpers
 # -------------------------
@@ -292,6 +303,18 @@ def _extrair_exportacao_c170_layout(linhas: List[str]) -> Tuple[Decimal, Dict[st
         {k: v.quantize(Decimal("0.01")) for k, v in por_cfop.items()},
         itens,
     )
+def _extrair_linha_0900(linhas: List[str]) -> Optional[str]:
+    ln = _find_first(linhas, "0900")
+    return _clean_sped_line(ln) if ln else None
+
+def _extrair_linhas_bloco_1_evidencia(linhas: List[str]) -> List[str]:
+    regs = {"1100", "1500", "1990"}
+    out = []
+    for ln in linhas or []:
+        r = _reg_of_line(ln)
+        if r in regs:
+            out.append(_clean_sped_line(ln))
+    return out
 
 
 def _pick_txt_from_dir(dir_path: Path, prefer_name_contains: Optional[str] = None) -> Path:
@@ -317,6 +340,35 @@ def _pick_txt_from_dir(dir_path: Path, prefer_name_contains: Optional[str] = Non
     # 2) Senão, mais recente
     return sorted(arquivos, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
+def _buscar_ajuste_exportacao_db(db: Session, versao_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Busca o AJUSTE_M mais recente ligado à versão (preferência: versao_revisada_id = versao_id).
+    """
+    q = (
+        db.query(EfdRevisao)
+        .filter(EfdRevisao.acao == "AJUSTE_M")
+        .filter(
+            (EfdRevisao.versao_revisada_id == int(versao_id)) |
+            (EfdRevisao.versao_origem_id == int(versao_id))
+        )
+        .order_by(EfdRevisao.id.desc())
+    )
+    rev = q.first()
+    if not rev:
+        return None
+
+    rj = dict(rev.revisao_json or {})
+    meta = rj.get("meta") if isinstance(rj.get("meta"), dict) else {}
+    detalhe = rj.get("detalhe") if isinstance(rj.get("detalhe"), dict) else {}
+
+    return {
+        "meta": meta,
+        "detalhe": detalhe,
+        "motivo_codigo": rev.motivo_codigo,
+        "created_at": rev.created_at,
+        "apontamento_id": rev.apontamento_id,
+        "id": rev.id,
+    }
 
 # -------------------------
 # Core: TXT -> Dados
@@ -326,8 +378,11 @@ def montar_dados_dossie_exportacao_de_txt(
     txt_path: Path,
     *,
     empresa_nome_override: Optional[str] = None,
+    ajuste_db: Optional[Dict[str, Any]] = None,
 ) -> DossieExportacaoDados:
     linhas = _ler_txt_lines(txt_path)
+    linha_0900 = _extrair_linha_0900(linhas)
+    bloco_1_evid = _extrair_linhas_bloco_1_evidencia(linhas)
 
     periodo_mm_aaaa, periodo_yyyymm = _extrair_periodo_0000(linhas)
     cnpj = _extrair_cnpj_0140_0100(linhas) or "—"
@@ -335,6 +390,30 @@ def montar_dados_dossie_exportacao_de_txt(
 
     # Exportação layout-driven (C170)
     export_total, export_por_cfop, export_itens = _extrair_exportacao_c170_layout(linhas)
+
+    # ✅ AJUSTE_M (delta) — vem do DB (se fornecido)
+    ajuste_tipo = None
+    ajuste_base_exportacao = Decimal("0.00")
+    ajuste_origem = None
+    ajuste_created_at = None
+
+    if isinstance(ajuste_db, dict):
+        meta = ajuste_db.get("meta") or {}
+        if isinstance(meta, dict):
+            ajuste_tipo = _safe_str(meta.get("tipo")) or None
+            ajuste_origem = _safe_str(meta.get("origem_regra")) or _safe_str(ajuste_db.get("motivo_codigo")) or None
+            ajuste_base_exportacao = _d(meta.get("base_exportacao") or "0").quantize(Decimal("0.01"))
+
+        ca = ajuste_db.get("created_at")
+        if ca:
+            try:
+                ajuste_created_at = ca.strftime("%d/%m/%Y %H:%M:%S")
+            except Exception:
+                ajuste_created_at = str(ca)
+
+    ajuste_extra_pis = (ajuste_base_exportacao * Decimal("0.0165")).quantize(Decimal("0.01"))
+    ajuste_extra_cof = (ajuste_base_exportacao * Decimal("0.0760")).quantize(Decimal("0.01"))
+    ajuste_extra_total = (ajuste_extra_pis + ajuste_extra_cof).quantize(Decimal("0.01"))
 
     # Bloco M (linhas)
     bloco_m_raw = _extrair_linhas_m(linhas)
@@ -402,6 +481,13 @@ def montar_dados_dossie_exportacao_de_txt(
         export_base_total=export_total,
         export_itens=int(export_itens),
         export_por_cfop=export_por_cfop,
+        ajuste_tipo=ajuste_tipo,
+        ajuste_base_exportacao=ajuste_base_exportacao,
+        ajuste_credito_extra_pis=ajuste_extra_pis,
+        ajuste_credito_extra_cofins=ajuste_extra_cof,
+        ajuste_credito_extra_total=ajuste_extra_total,
+        ajuste_origem=ajuste_origem,
+        ajuste_created_at=ajuste_created_at,
 
         tem_m100=tem_m100,
         tem_m500=tem_m500,
@@ -414,7 +500,8 @@ def montar_dados_dossie_exportacao_de_txt(
 
         csts=csts,
         base_por_cst={k: v.quantize(Decimal("0.01")) for k, v in base_por_cst.items()},
-
+        linha_0900=linha_0900,
+        bloco_1_linhas_evidencia=bloco_1_evid,
         bloco_m_linhas_evidencia=evid,
         observacoes=observacoes,
         fonte_txt_path=txt_path,
@@ -432,7 +519,7 @@ def gerar_docx_dossie_exportacao(*, dados: DossieExportacaoDados, output_dir: Op
 
     # Nome baseado no TXT em questão
     stem = dados.fonte_txt_path.stem.replace("_RETIFICADO", "")
-    fname = f"dossie_{stem}_RETIFICADO.docx"
+    fname = f"dossie_{stem}_RETIFICADO_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
     path = output_dir / fname
 
     doc = Document()
@@ -487,6 +574,19 @@ def gerar_docx_dossie_exportacao(*, dados: DossieExportacaoDados, output_dir: Op
             "Em caso de expectativa de ressarcimento por exportação, revisar as entradas/insumos e a apuração/escrituração do Bloco M."
         )
 
+    doc.add_heading("3.1) Ajuste de Exportação (AJUSTE_M)", level=3)
+    aj_base = getattr(dados, "ajuste_base_exportacao", Decimal("0.00"))
+    if aj_base > 0:
+        doc.add_paragraph(f"Tipo: {dados.ajuste_tipo or '—'} | Origem: {dados.ajuste_origem or '—'}")
+        if dados.ajuste_created_at:
+            doc.add_paragraph(f"Registrado em: {dados.ajuste_created_at}")
+        doc.add_paragraph(f"Base exportação (delta): R$ {_fmt_br(dados.ajuste_base_exportacao)}")
+        doc.add_paragraph(f"Crédito extra estimado: R$ {_fmt_br(dados.ajuste_credito_extra_total)} "
+                          f"(PIS {_fmt_br(dados.ajuste_credito_extra_pis)} + COFINS {_fmt_br(dados.ajuste_credito_extra_cofins)})")
+    else:
+        doc.add_paragraph("Não foi identificado AJUSTE_M de exportação no banco para esta versão.")
+
+
     # 4) Composição por CST
     doc.add_heading("4) Composição por CST (M105/M505)", level=2)
     if dados.base_por_cst:
@@ -503,7 +603,7 @@ def gerar_docx_dossie_exportacao(*, dados: DossieExportacaoDados, output_dir: Op
 
     # 5) Evidências no Bloco M
     doc.add_heading("5) Evidências no SPED (trechos do Bloco M)", level=2)
-    if dados.bloco_m_linhas_evidencia:
+    if (dados.bloco_m_linhas_evidencia or []):
         if "EvidenciaMonospace" not in [s.name for s in doc.styles]:
             evid_style = doc.styles.add_style("EvidenciaMonospace", 1)
             evid_style.font.name = "Consolas"
@@ -515,6 +615,22 @@ def gerar_docx_dossie_exportacao(*, dados: DossieExportacaoDados, output_dir: Op
     else:
         doc.add_paragraph("Sem linhas M100/M105/M500/M505 para evidência (Bloco M sem apuração de crédito no período).")
 
+    doc.add_heading("5.1) Evidência de Receitas (0900)", level=3)
+    if dados.linha_0900:
+        doc.add_paragraph(dados.linha_0900)
+        doc.add_paragraph("Observação: o ajuste aplicado afeta o Bloco M (crédito), não altera as receitas do período.")
+    else:
+        doc.add_paragraph("Linha 0900 não encontrada no TXT.")
+
+    doc.add_heading("5.2) Evidências do Bloco 1 (1100/1500)", level=3)
+    if (dados.bloco_1_linhas_evidencia or []):
+        for ln in dados.bloco_1_linhas_evidencia[:200]:
+            doc.add_paragraph(_clean_sped_line(ln),
+                              style="EvidenciaMonospace" if "EvidenciaMonospace" in [s.name for s in
+                                                                                     doc.styles] else None)
+    else:
+        doc.add_paragraph("Sem evidências do Bloco 1 (1100/1500) no TXT.")
+
     # 6) Observações
     if dados.observacoes:
         doc.add_heading("6) Observações", level=2)
@@ -522,6 +638,13 @@ def gerar_docx_dossie_exportacao(*, dados: DossieExportacaoDados, output_dir: Op
             doc.add_paragraph(f"- {obs}")
 
     doc.add_paragraph(f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    doc.add_heading("7) Checklist PER/DCOMP Web (operacional)", level=2)
+    doc.add_paragraph("- Transmitir a EFD-Contribuições retificadora e aguardar processamento na Receita.")
+    doc.add_paragraph("- No PER/DCOMP Web: selecionar crédito de PIS/COFINS conforme apuração do período (Bloco M).")
+    doc.add_paragraph(
+        "- Em caso de intimação/solicitação: anexar este dossiê + memória de cálculo + evidências de exportação (CFOP 7xxx).")
+    doc.add_paragraph(
+        "- Manter rastreabilidade do ajuste: motivo/regra (EXP_RESSARC_V1) e referência do SPED retificado.")
     doc.save(str(path))
     return path
 
@@ -552,13 +675,17 @@ def gerar_dossie_exportacao_docx(
     empresa_nome_override: Optional[str] = None,
     output_dir: Optional[Path] = None,
 ) -> Path:
-    """
-    Mantém compatibilidade com a rota /dossie/exportacao/{versao_id}.
-    """
-    dados = montar_dados_dossie_exportacao(
-        db,
-        versao_id=versao_id,
+    # ✅ mantém exatamente o comportamento antigo (TXT na pasta Dossies)
+    pasta = Path.home() / "Downloads" / "Dossies"
+    txt_path = _pick_txt_from_dir(dir_path=pasta)
+
+    # ✅ incrementa com AJUSTE_M do banco (se existir)
+    ajuste_db = _buscar_ajuste_exportacao_db(db, versao_id=int(versao_id))
+
+    dados = montar_dados_dossie_exportacao_de_txt(
+        txt_path,
         empresa_nome_override=empresa_nome_override,
+        ajuste_db=ajuste_db,
     )
     return gerar_docx_dossie_exportacao(dados=dados, output_dir=output_dir)
 

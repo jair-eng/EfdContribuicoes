@@ -4,9 +4,10 @@ from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
 from .achado import Achado
 import time
+from app.fiscal.constants import DOM_GERAL
 from app.fiscal.contexto import get_fiscal_db, get_fiscal_empresa_id
-from ..cat_fiscal import CatalogoFiscal
-from ..ent_cat_fiscal import carregar_catalogo_fiscal
+from app.fiscal.cat_fiscal import CatalogoFiscal
+from app.fiscal.ent_cat_fiscal import carregar_catalogo_fiscal
 import logging
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class RegraBase(ABC):
     tipo: str
     _CATALOGO_CACHE = {}  # empresa_id -> (ts, CatalogoFiscal)
     _CATALOGO_TTL = 900  # 15 min
+    dominio: str = DOM_GERAL
 
     @abstractmethod
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
@@ -192,6 +194,11 @@ class RegraBase(ABC):
             return bool(cat) and bool(slug) and cat.ncm_match(slug, ncm)
         except Exception:
             return False
+    @staticmethod
+    def ncm_match_static(cat: CatalogoFiscal, slug: str, ncm: str) -> bool:
+        # compat: código antigo do scanner/shared
+        return RegraBase.ncm_match(cat, slug, ncm)
+
 
     @staticmethod
     def cfop_match(cat: CatalogoFiscal, slug: str, cfop: str) -> bool:
@@ -201,8 +208,19 @@ class RegraBase(ABC):
         return cat.match_codigo(slug, s)
 
     @staticmethod
+    def cfop_match_static(cat: CatalogoFiscal, slug: str, cfop: str) -> bool:
+        return RegraBase.cfop_match(cat, slug, cfop)
+
+    @staticmethod
     def cst_match(cat: CatalogoFiscal, slug: str, cst: str) -> bool:
         return cat.match_codigo(slug, cst)
+    @staticmethod
+    def cst_match_static(cat: CatalogoFiscal, slug: str, cst: str) -> bool:
+        return RegraBase.cst_match(cat, slug, cst)
+
+    @staticmethod
+    def get_db(_registro=None):
+        return get_fiscal_db()
 
 
 def _rebaixar_prioridade(p: str | None) -> str | None:
@@ -295,7 +313,7 @@ def _mapa_grupo_por_codigo(codigo: str) -> Optional[str]:
     if codigo.startswith("EXP_"):
         return "EXPORTACAO"
     if codigo.startswith("POSTO_") or "MONOF" in codigo:
-        return "POSTO_MONOFASICO"
+        return "MONOFASICO"
     if codigo.startswith("CAFE_"):
         return "CAFE"
     return None

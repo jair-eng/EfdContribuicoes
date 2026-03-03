@@ -13,6 +13,7 @@ class LinhaLogica:
     dados: List[Any]
     origem: Literal["ORIGINAL", "REVISAO", "INSERIDO", "DELETADO"] = "ORIGINAL"
     registro_id: Optional[int] = None
+    pai_id: Optional[int] = None
     revisao_id: Optional[int] = None
 
 
@@ -52,6 +53,7 @@ class LinhaLogica:
             dados=dados,
             origem="ORIGINAL",
             registro_id=int(getattr(r, "id", 0) or 0) or None,
+            pai_id=int(getattr(r, "pai_id", 0) or 0) or None,
             revisao_id=None,
         )
 

@@ -8,12 +8,9 @@ from app.fiscal.constants import (
     GRUPO_EXPORTACAO,
     SUBGRUPO_CONSISTENCIA,
 )
-from app.fiscal.contexto import dec_ptbr
-from app.fiscal.constants import ACAO_OVERRIDE_BASE_POR_CST
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.base_regras import RegraBase
-from app.fiscal.regras.achado import Achado
-from app.schemas.workflow import RevisaoFiscal
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.achado import Achado
 
 logger = logging.getLogger(__name__)
 

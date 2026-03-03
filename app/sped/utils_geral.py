@@ -1,9 +1,12 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List
 from collections import defaultdict
-from typing import Sequence
-from app.db.models import EfdRegistro
+from typing import Sequence, Iterable
+from app.db.models import EfdRegistro, EfdApontamento
+from app.fiscal.contexto import get_fiscal_db
 from app.fiscal.settings_fiscais import CSTS_RECEITA_NCUM, CSTS_RECEITA_M
+from sqlalchemy.orm import Session
+
 from collections import Counter
 import re
 
@@ -16,6 +19,20 @@ _RX_GRAOS = re.compile(
 )
 
 _RX_NUM_BR = re.compile(r"^\d{1,3}(\.\d{3})*,\d+$|^\d+,\d+$|^\d+$")
+
+
+CFOPS_DEVOLUCAO_VENDA_ENTRADA = {"1202", "2202", "3202"}  # devolução de venda (mesma lógica da saída, mas NÃO é compra)
+
+def _cfop_gate_entrada_compra(cfop: str) -> bool:
+    cfop = (cfop or "").strip()
+    if not (cfop and len(cfop) == 4 and cfop.isdigit()):
+        return False
+    if cfop[0] not in ("1", "2"):
+        return False
+    # exclui devolução de venda (não é compra para comercialização)
+    if cfop in CFOPS_DEVOLUCAO_VENDA_ENTRADA:
+        return False
+    return True
 
 def get_registro_id(r) -> int:
     # ORM
@@ -47,6 +64,16 @@ def get_registro_id(r) -> int:
                 continue
 
     return 0
+
+def _safe_json(obj):
+    if isinstance(obj, dict):
+        return {k: _safe_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_safe_json(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return str(obj)
+    return obj
+
 
 
 def _parece_cod_item(s: str) -> bool:
@@ -468,3 +495,54 @@ def consolidar_achados_c170_insumo_v2(result) -> None:
 
     result.apontamentos = nova
     print(f"[SCAN] CONSOLIDADO {alvo}: removidos={removed} mantido=1", flush=True)
+
+
+
+def versao_tem_apontamento_codigo(
+    db: Session,
+    *,
+    versao_id: int,
+    codigos: Iterable[str],
+    incluir_resolvidos: bool = True,
+) -> bool:
+    """
+    Retorna True se existir apontamento na versão com algum dos códigos informados.
+
+    - incluir_resolvidos=True: considera qualquer apontamento (pendente ou resolvido)
+      (bom para "contexto existe", não para "ação pendente")
+    - incluir_resolvidos=False: considera apenas pendentes (resolvido=False)
+      (bom para decidir auto-fix em batch)
+    """
+    versao_id = int(versao_id or 0)
+    codigos = [str(c).strip() for c in (codigos or []) if str(c).strip()]
+    if not versao_id or not codigos:
+        return False
+
+    q = (
+        db.query(EfdApontamento.id)
+        .filter(EfdApontamento.versao_id == versao_id)
+        .filter(EfdApontamento.codigo.in_(codigos))
+    )
+
+    if not incluir_resolvidos:
+        q = q.filter(EfdApontamento.resolvido.is_(False))
+
+    return q.first() is not None
+
+
+def versao_tem_apontamento_codigo_ctx(
+    *,
+    versao_id: int,
+    codigos: Iterable[str],
+    incluir_resolvidos: bool = True,
+) -> bool:
+    db = get_fiscal_db()
+    print("[CTX] db=", db, "db_id=", id(db), "bind=", getattr(db, "bind", None))
+    ok = versao_tem_apontamento_codigo(
+        db,
+        versao_id=versao_id,
+        codigos=codigos,
+        incluir_resolvidos=incluir_resolvidos,
+    )
+    print("[CTX] versao_id=", versao_id, "codigos=", list(codigos), "=>", ok)
+    return ok

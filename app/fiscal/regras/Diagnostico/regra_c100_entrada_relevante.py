@@ -1,11 +1,10 @@
-from collections import defaultdict
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import Optional
 
 from app.config.settings import ALIQUOTA_TOTAL
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.achado import Achado
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.achado import Achado
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 
 class RegraC100EntradaRelevante(RegraBase):
     codigo = "C100-ENT"

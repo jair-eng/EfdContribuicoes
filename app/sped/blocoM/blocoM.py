@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Any, Optional, Iterable, Tuple
 from decimal import Decimal
 from app.config.settings import ALIQUOTA_PIS_PCT, ALIQUOTA_COFINS_PCT
+from app.fiscal.contexto import dec_any
 from app.sped.blocoM.m_receita import (
     gerar_m_receitas,
     extrair_receitas_c170,
@@ -204,6 +205,7 @@ def construir_bloco_m_v3(
     base_por_cst: Dict[str, Decimal],
     cod_cred: str = "201",
     nat_bc: str = "01",
+    ajustes_m: Optional[List[Dict[str, Any]]] = None,
 ) -> List[str]:
     """
     Bloco M "PVA-proof":
@@ -212,6 +214,15 @@ def construir_bloco_m_v3(
       - Gera receitas M400/M410 e M800/M810 completas e coerentes.
       - Evita dependência de M* antigos do arquivo.
     """
+
+    ajustes_m = ajustes_m or []
+    if ajustes_m:
+        # Parte 2: só prova que chegou aqui (não altera cálculo)
+        tipos = []
+        for a in ajustes_m[:5]:
+            t = (a or {}).get("tipo") or (a or {}).get("origem") or "?"
+            tipos.append(str(t))
+        print(f"✅ BLOCO_M> ajustes_m recebidos={len(ajustes_m)} | tipos_top={tipos}")
 
     # 0) normaliza bases por CST
     base_por_cst_norm: Dict[str, Decimal] = {}
@@ -224,7 +235,52 @@ def construir_bloco_m_v3(
             continue
         base_por_cst_norm[c] = b.quantize(Decimal("0.01"))
 
-    base_total = sum(base_por_cst_norm.values(), Decimal("0.00")).quantize(Decimal("0.01"))
+    ajustes_m = ajustes_m or []
+
+    base_extra = Decimal("0.00")
+    vistos = set()
+
+    for a in ajustes_m:
+        if not isinstance(a, dict):
+            continue
+
+        # seu loader está te passando "meta" direto? depende de como você montou ajustes_m.
+        # Pelo select, no banco está revisao_json={"meta": {...}, "detalhe": {...}}.
+        meta = a.get("meta") if isinstance(a.get("meta"), dict) else a  # fallback
+
+        if str(meta.get("tipo") or "").strip().upper() != "EXPORTACAO_RESSARCIMENTO":
+            continue
+
+        raw_base = meta.get("base_exportacao")
+        if raw_base in (None, "", {}):
+            continue
+
+        try:
+            v = dec_any(raw_base)
+        except Exception:
+            continue
+
+        if v <= 0:
+            continue
+
+        # dedup bom: tipo + base + origem_regra (evita somar em dobro)
+        key = (
+            "EXPORTACAO_RESSARCIMENTO",
+            str(raw_base),
+            str(meta.get("origem_regra") or ""),
+            str(meta.get("cod_cont") or ""),
+            str(meta.get("nat_bc") or ""),
+        )
+        if key in vistos:
+            continue
+        vistos.add(key)
+
+        base_extra += v
+
+    if base_extra > 0:
+        print(f"✅ BLOCO_M> AJUSTE_M exportação aplicado: base_extra={_fmt_br(base_extra)} (dedup={len(vistos)})")
+
+    base_total = (sum(base_por_cst_norm.values(), Decimal("0.00")) + base_extra).quantize(Decimal("0.01"))
 
     # créditos totais
     credito_pis = (base_total * Decimal("0.0165")).quantize(Decimal("0.01"))
@@ -254,6 +310,11 @@ def construir_bloco_m_v3(
             if ln and ln not in emitted:
                 bloco.append(ln)
                 emitted.add(ln)
+
+    print("DBG M> base_por_cst_norm total =", _fmt_br(sum(base_por_cst_norm.values(), Decimal("0.00"))))
+    print("DBG M> base_extra             =", _fmt_br(base_extra))
+    print("DBG M> base_total             =", _fmt_br(base_total))
+    print("DBG M> credito_pis            =", _fmt_br(credito_pis))
 
     # 3) crédito PIS (M100/M105/M200)
     if base_total > 0:

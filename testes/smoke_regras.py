@@ -2,8 +2,8 @@ from decimal import Decimal
 
 # ajuste os imports conforme seu projeto
 from app.config.settings import ALIQUOTA_PIS, ALIQUOTA_COFINS, ALIQUOTA_TOTAL
-from app.fiscal.regras.base_regras import RegraBase
-from app.fiscal.regras.regra_exportacao import RegraExportacaoRessarcimentoV1
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.regra_exportacao import RegraExportacaoRessarcimentoV1
 from app.fiscal.dto import RegistroFiscalDTO
 
 

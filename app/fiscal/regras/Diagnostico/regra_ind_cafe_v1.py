@@ -6,7 +6,7 @@ import logging
 from typing import Optional, Dict, Any
 
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 from app.config.settings import IND_AGRO_ALIQUOTA_EFETIVA  # você já usa como proxy
 from app.sped.utils_geral import _is_cafe_by_desc, _is_cafe_by_ncm
 

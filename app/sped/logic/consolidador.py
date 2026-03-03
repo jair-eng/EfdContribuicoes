@@ -5,12 +5,22 @@ from app.db.models.ref_models import RefCstPisCofins, RefCfop
 from app.sped.blocoC.c170_utils import _parse_linha_sped_to_reg_dados, _parse_sped_float
 from typing import Any, Dict, Optional, List, Tuple
 from sqlalchemy.orm import Session
+import os
 from decimal import Decimal
 from app.sped.revisao_overlay import LinhaLogica
-from sqlalchemy import func
+from sqlalchemy import func,or_
 import re
 
 CPF_RE = re.compile(r"^\d{11}$")
+
+
+PF_DEBUG = os.getenv("PF_DEBUG", "0").strip() == "1"
+
+# para liga no power shell set PF_DEBUG=1
+
+def pfdbg(msg: str) -> None:
+        if PF_DEBUG:
+            print(msg)
 
 def _to_decimal(self, s):
     if not s:
@@ -357,12 +367,8 @@ def _normaliza_doc(s: Any) -> str:
     )
 
 
-
 def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
-    """
-    True = PF (CPF) / False = PJ (CNPJ) ou ambíguo (não bloqueia).
-    Regra: se existir QUALQUER CNPJ, NUNCA bloqueia como PF.
-    """
+
 
     def only_digits(x: object) -> str:
         return "".join(ch for ch in str(x or "") if ch.isdigit())
@@ -370,74 +376,98 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     def offset_if_reg_first(dados: list, reg: str) -> int:
         return 1 if dados and str(dados[0]).strip().upper() == reg else 0
 
-    def norm_cpf(raw: object) -> str:
-        d = only_digits(raw)
-        if not d:
-            return ""
-        if len(d) > 11:
-            d = d[-11:]
-        return d.zfill(11)
-
     reg_atual = db.get(EfdRegistro, int(registro_id))
-    if not reg_atual:
-        return False
+    if not reg_atual: return False
 
-    # acha C100 pai (por id anterior)
-    reg_c100 = reg_atual
-    if reg_atual.reg == "C170":
-        reg_c100 = (
-            db.query(EfdRegistro)
-            .filter(
-                EfdRegistro.versao_id == int(versao_id),
-                EfdRegistro.reg == "C100",
-                EfdRegistro.id < int(reg_atual.id),
-            )
-            .order_by(EfdRegistro.id.desc())
-            .first()
-        )
-    if not reg_c100:
-        return False
+    # 1) Achar o C100
+    reg_c100 = None
+    if str(getattr(reg_atual, "reg", "")).upper() == "C100":
+        reg_c100 = reg_atual
+    else:
+        pai_id = int(getattr(reg_atual, "pai_id", 0) or 0)
+        if pai_id:
+            pai = db.get(EfdRegistro, pai_id)
+            if pai and str(getattr(pai, "reg", "")).upper() == "C100":
+                reg_c100 = pai
+
+    if not reg_c100: return False
+    pfdbg(f"[PF] registro_id={registro_id} reg_atual={getattr(reg_atual, 'reg', None)}")
+    pfdbg(f"[PF] C100 id={reg_c100.id}")
 
     dados_c100 = _get_dados(reg_c100)
     off_c100 = offset_if_reg_first(dados_c100, "C100")
 
-    cod_part = str(dados_c100[2 + off_c100]).strip() if len(dados_c100) > (2 + off_c100) else ""
-    if not cod_part:
-        return False
+    cod_part = str(dados_c100[2 + off_c100]).strip()
+    chave = only_digits(dados_c100[8 + off_c100])
+    pfdbg(f"[PF] cod_part={cod_part}")
+    pfdbg(f"[PF] chave={chave}")
 
-    # tenta achar 0150 por $.dados[0] e fallback $.dados[1]
-    reg_0150 = (
-        db.query(EfdRegistro)
-        .filter(
-            EfdRegistro.versao_id == int(versao_id),
-            EfdRegistro.reg == "0150",
+    # 2) Identificar o Estabelecimento (0140) dono deste C100
+    # Pegamos o CNPJ da filial na chave (posições 7 a 20)
+    cnpj_filial_na_chave = chave[6:20] if len(chave) == 44 else None
+
+    # 3) Localizar o 0140 que precede este C100 ou que tenha o CNPJ da chave
+    # IMPORTANTE: No SPED, os participantes de uma filial ficam após o 0140 dela.
+    target_0140 = None
+    if cnpj_filial_na_chave:
+        target_0140 = db.query(EfdRegistro).filter(
+            EfdRegistro.versao_id == versao_id,
+            EfdRegistro.reg == "0140",
+            EfdRegistro.id < reg_c100.id,  # O 0140 sempre vem antes do C100
+            func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[3]")).contains(cnpj_filial_na_chave)
+        ).order_by(EfdRegistro.id.desc()).first()
+
+    # Se não achou por CNPJ, pega o último 0140 antes do C100 (fallback físico)
+    if not target_0140:
+        target_0140 = db.query(EfdRegistro).filter(
+            EfdRegistro.versao_id == versao_id,
+            EfdRegistro.reg == "0140",
+            EfdRegistro.id < reg_c100.id
+        ).order_by(EfdRegistro.id.desc()).first()
+
+    if not target_0140: return False
+    pfdbg(f"[PF] target_0140 id={getattr(target_0140, 'id', None)}")
+
+    # 4) Buscar o 0150 que está DEPOIS desse 0140 específico
+    # mas ANTES do próximo 0140 (para não vazar participante de outra filial)
+    prox_0140 = db.query(EfdRegistro).filter(
+        EfdRegistro.versao_id == versao_id,
+        EfdRegistro.reg == "0140",
+        EfdRegistro.id > target_0140.id
+    ).order_by(EfdRegistro.id.asc()).first()
+
+    limite_id = prox_0140.id if prox_0140 else 9999999999
+
+    reg_0150 = db.query(EfdRegistro).filter(
+        EfdRegistro.versao_id == versao_id,
+        EfdRegistro.reg == "0150",
+        EfdRegistro.id > target_0140.id,
+        EfdRegistro.id < limite_id
+    ).filter(
+        or_(
             func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[0]")) == cod_part,
+            func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[1]")) == cod_part
         )
-        .first()
-    )
-    if not reg_0150:
-        reg_0150 = (
-            db.query(EfdRegistro)
-            .filter(
-                EfdRegistro.versao_id == int(versao_id),
-                EfdRegistro.reg == "0150",
-                func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[1]")) == cod_part,
-            )
-            .first()
-        )
-    if not reg_0150:
-        return False
+    ).first()  # Pegamos o primeiro (e único) dentro do bloco da filial
 
-    d = _get_dados(reg_0150)
-    off_0150 = offset_if_reg_first(d, "0150")
+    if not reg_0150: return False
+    pfdbg(f"[PF] 0150 id={getattr(reg_0150, 'id', None)}")
 
-    raw_cnpj = d[3 + off_0150] if len(d) > (3 + off_0150) else ""
-    raw_cpf  = d[4 + off_0150] if len(d) > (4 + off_0150) else ""
+    # 5) Análise final do 0150 encontrado
+    d_0150 = _get_dados(reg_0150)
+    off_0150 = offset_if_reg_first(d_0150, "0150")
 
-    # se tiver QUALQUER CNPJ => PJ
-    if only_digits(raw_cnpj):
-        return False
+    cnpj_0150 = only_digits(d_0150[3 + off_0150])
+    cpf_0150 = only_digits(d_0150[4 + off_0150])
 
-    cpf = norm_cpf(raw_cpf)
-    return len(cpf) == 11 and cpf != "00000000000"
+    # Regra de Ouro: Se tem CNPJ preenchido, é PJ. Se CNPJ vazio e tem CPF, é PF.
+    if cnpj_0150:
+        return False  # É PJ
 
+    if len(cpf_0150) == 11:
+        return True  # É PF
+
+    pfdbg(f"[PF] cnpj_0150={cnpj_0150} cpf_0150={cpf_0150}")
+    pfdbg(f"[PF] RESULTADO is_pf={bool(len(cpf_0150) == 11 and not cnpj_0150)}")
+
+    return False

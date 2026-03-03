@@ -4,6 +4,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.db.session import get_db
+from typing import Optional
+from pydantic import field_validator
+from app.fiscal.constants import DOMINIOS_VALIDOS
 from app.services.upload_confirm_service import UploadConfirmService
 from app.services.upload_service import UploadService
 from typing import List , Dict , Any
@@ -28,8 +31,20 @@ class UploadPreviewResponse(BaseModel):
 
 class UploadConfirmPayload(BaseModel):
     temp_id: str = Field(..., min_length=8)
-    # opcionais, se você quiser retornar/registrar o nome que veio do upload (não obrigatório)
     nome_arquivo: str | None = None
+
+    # ✅ NOVO
+    dominio: str | None = None  # ex: "CAFE", "AGRO", "SUP", "POSTO"
+
+    @field_validator("dominio")
+    @classmethod
+    def validar_dominio(cls, v: Optional[str]):
+        if v is None:
+            return None
+        v2 = str(v).strip().upper()
+        if v2 not in DOMINIOS_VALIDOS:
+            raise ValueError(f"dominio inválido: {v2}")
+        return v2
 
 
 class UploadConfirmResponse(BaseModel):
@@ -141,6 +156,7 @@ def upload_confirm_batch(payloads: List[UploadConfirmPayload], db: Session = Dep
                         db,
                         temp_id=p.temp_id,
                         nome_arquivo=p.nome_arquivo,
+                        dominio=p.dominio,
 
                     )
                 results.append(res)

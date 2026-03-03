@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.db.models import EfdRegistro
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.base_regras import RegraBase  # só p/ helpers se quiser, opcional
+
 
 def montar_c100_entrada_relevante_agg(
     registros_db: Sequence[EfdRegistro],
@@ -44,18 +43,20 @@ def montar_c100_entrada_relevante_agg(
 
     for r in c100s:
         dados = _dados_any(r)
+
+        # ✅ Normaliza caso o REG venha dentro do array
+        if dados and str(dados[0]).strip().upper() == "C100":
+            dados = dados[1:]
+
         if len(dados) < 11:
             continue
 
-        ind_oper = str(dados[0] or "").strip()  # ✅ IND_OPER é o primeiro campo após REG
+        ind_oper = str(dados[0] or "").strip()
         if ind_oper != "0":
             continue
 
-        # VL_DOC observado em [10] (fallback [14])
-        vl_doc_raw = dados[10] if len(dados) > 10 else None
-        if (vl_doc_raw is None or str(vl_doc_raw).strip() == "") and len(dados) > 14:
-            vl_doc_raw = dados[14]
-
+        # ✅ VL_DOC: índice 10 (sem fallback perigoso)
+        vl_doc_raw = dados[10]
         vl_doc_num = str(vl_doc_raw or "").strip()
         if not vl_doc_num:
             continue
@@ -68,6 +69,7 @@ def montar_c100_entrada_relevante_agg(
         if v < vl_doc_min:
             continue
 
+
         linha_r = int(getattr(r, "linha", 0) or 0)
 
         # ✅ aqui é importante: rows_like pode ter registro_id “real” e id “fake”
@@ -75,10 +77,10 @@ def montar_c100_entrada_relevante_agg(
         if rid <= 0:
             rid = int(getattr(r, "id", 0) or 0)
 
-        if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
-            anchor_linha = linha_r
-        if anchor_registro_id is None and rid > 0:
-            anchor_registro_id = rid
+        if linha_r > 0:
+            if anchor_linha is None or linha_r < anchor_linha:
+                anchor_linha = linha_r
+                anchor_registro_id = rid
 
         num_doc = str(dados[6] or "").strip() if len(dados) > 6 else ""
         chave = str(dados[7] or "").strip() if len(dados) > 7 else ""

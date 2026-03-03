@@ -14,11 +14,12 @@ def montar_c190_agg(registros_db: Sequence[EfdRegistro]) -> RegistroFiscalDTO | 
     itens = []
     for r in c190s:
         dados = (r.conteudo_json or {}).get("dados") or []
-        if len(dados) >= 4:
+        if len(dados) >= 6:
             itens.append({
                 "cst": dados[0],
                 "cfop": dados[1],
                 "vl_opr": dados[3],
+                "vl_icms": dados[5],
                 "linha": int(getattr(r, "linha", 0) or 0),  # opcional, mas ajuda no top3
             })
 

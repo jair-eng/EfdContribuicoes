@@ -5,10 +5,10 @@ from typing import Any, List, Optional
 from app.config.settings import  ALIQUOTA_TOTAL
 from app.fiscal.contexto import dec_any
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.achado import Achado
+from app.fiscal.regras.Diagnostico.achado import Achado
 import logging
 
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 
 logger = logging.getLogger(__name__)
 

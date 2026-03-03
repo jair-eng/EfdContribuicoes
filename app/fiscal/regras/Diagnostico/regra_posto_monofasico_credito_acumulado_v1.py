@@ -3,19 +3,19 @@ from typing import Optional
 import logging
 import os
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.achado import Achado
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.achado import Achado
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 
 logger = logging.getLogger(__name__)
 
 
-class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
-    codigo = "POSTO_MONOF_CRED_ACUM_V1"
-    nome = "Posto/Monofásico: crédito de insumos acumulado (não ressarcível)"
+class RegraMonofasicoCreditoNaoRessarcivelV1(RegraBase):
+    codigo = "MONOF_CRED_ACUM_V1"
+    nome = "Monofásico: crédito acumulado (uso em abatimento, sem ressarcimento padrão)"
     tipo = "OPORTUNIDADE"
 
-    # 🔧 liga via ENV: POSTO_MONOF_DEBUG=1
-    debug: bool = (os.getenv("POSTO_MONOF_DEBUG", "").strip() in ("1", "true", "True", "yes", "sim", "SIM"))
+    # 🔧 liga via ENV: PROD_MONOF_DEBUG=1
+    debug: bool = (os.getenv("MONOF_CRED_ACUM_V1_MONOF_DEBUG", "").strip() in ("1", "true", "True", "yes", "sim", "SIM"))
 
     def aplicar(self, registro: RegistroFiscalDTO) -> Optional[Achado]:
         try:
@@ -33,9 +33,12 @@ class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
             score_monofasico = self.parse_int(meta_flags.get("score_monofasico"))
 
             if self.debug:
-                logger.info("[POSTO_MONOF] perfil=%s score=%s meta=%s", perfil_monofasico, score_monofasico, meta_flags)
+                logger.info("[PROD_MONOF] perfil=%s score=%s meta=%s", perfil_monofasico, score_monofasico, meta_flags)
 
             if not perfil_monofasico:
+                return None
+
+            if score_monofasico is not None and score_monofasico < 80:
                 return None
 
             # Controles bloco 1
@@ -54,7 +57,7 @@ class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
 
             if self.debug:
                 logger.info(
-                    "[POSTO_MONOF] temM=%s m_zerado=%s pis=%s cof=%s impacto=%s 1200=%s 1210=%s 1700=%s",
+                    "[PROD_MONOF] temM=%s m_zerado=%s pis=%s cof=%s impacto=%s 1200=%s 1210=%s 1700=%s",
                     tem_apuracao_m, bloco_m_zerado, cred_pis, cred_cof, impacto, tem_1200, tem_1210, tem_1700
                 )
 
@@ -76,9 +79,9 @@ class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
                 return Achado(
                     registro_id=int(getattr(registro, "id", 0) or 0),
                     tipo="ALERTA",
-                    codigo="POSTO_MONOF_SEM_CRED_M_V1",
+                    codigo="MONOF_SEM_CRED_M_V1",
                     descricao=desc,
-                    regra="Posto/Monofásico: perfil detectado sem crédito no M",
+                    regra="Monofásico: perfil detectado sem crédito no M",
                     impacto_financeiro=None,
                     prioridade="ALTA",
                     meta={
@@ -143,7 +146,7 @@ class RegraPostoMonofasicoCreditoAcumuladoV1(RegraBase):
 
         except Exception:
             logger.exception(
-                "ERRO POSTO_MONOF_CRED_ACUM_V1 | reg=%s id=%s linha=%s empresa_id=%s versao_id=%s",
+                "ERRO MONOF_CRED_ACUM_V1 | reg=%s id=%s linha=%s empresa_id=%s versao_id=%s",
                 getattr(registro, "reg", None),
                 getattr(registro, "id", None),
                 getattr(registro, "linha", None),

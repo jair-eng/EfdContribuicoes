@@ -6,6 +6,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.models.base import Base
 from sqlalchemy import String
 
+from app.fiscal.constants import DOMINIOS_VALIDOS
+
+
 class EfdVersao(Base):
     __tablename__ = "efd_versao"
 
@@ -21,6 +24,10 @@ class EfdVersao(Base):
     retifica_de_versao_id: Mapped[int | None] = mapped_column(
         ForeignKey("efd_versao.id"),
         nullable=True,
+    )
+    dominio = Column(
+        Enum(*DOMINIOS_VALIDOS, name="efd_versao_dominio_enum"),
+        nullable=True,  # override opcional
     )
 
     arquivo = relationship("EfdArquivo", back_populates="versoes")

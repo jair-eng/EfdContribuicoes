@@ -1,19 +1,15 @@
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional, Any, Dict, List
+from decimal import Decimal
+from typing import Optional
 
-from app.fiscal import contexto
 from app.fiscal.constants import (
-    GRUPO_EXPORTACAO,
-    SUBGRUPO_RESSARCIMENTO,
-    SUBGRUPO_CONSISTENCIA, ACAO_OVERRIDE_BASE_POR_CST,
+    ACAO_OVERRIDE_BASE_POR_CST,
 )
 from app.fiscal.contexto import dec_ptbr
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.achado import Achado, Prioridade
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.achado import Achado
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 from app.schemas.workflow import RevisaoFiscal
 from collections import defaultdict
-from app.sped.renderer import  _sha1
 from app.config.settings import (
     ALIQUOTA_PIS,
     ALIQUOTA_COFINS,
@@ -282,20 +278,35 @@ class RegraExportacaoRessarcimentoV1(RegraBase):
             registro_id = int(getattr(ap, "registro_id", 0) or 0)
             registro_reg = str(getattr(ap, "registro", "") or "C170")
 
+            ajuste_payload = {
+                "tipo": "EXPORTACAO_RESSARCIMENTO",
+                "origem_regra": self.codigo,
+                "base_exportacao": str(base_export),
+                "aliq_pis": "0,0165",
+                "aliq_cofins": "0,0760",
+                "cod_cont": "201",
+                "nat_bc": "01",
+
+            }
+
             return [
                 RevisaoFiscal(
                     registro_id=registro_id if registro_id > 0 else None,
-                    registro=registro_reg,
-                    operacao=ACAO_OVERRIDE_BASE_POR_CST,
+                    registro="M",
+                    operacao="AJUSTE_M",
                     conteudo=None,
                     linha_referencia=None,
                     linha_antes=None,
                     linha_hash=None,
                     regra_codigo=self.codigo,
                     payload={
-                        "base_por_cst": base_por_cst,
+                        "tipo": "EXPORTACAO_RESSARCIMENTO",
+                        "origem_regra": self.codigo,
+                        "base_exportacao": str(base_export),  # "19262.67"
                         "cod_cont": "201",
                         "nat_bc": "01",
+                        "aliq_pis": "0,0165",
+                        "aliq_cofins": "0,0760",
                     },
                 )
             ]

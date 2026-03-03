@@ -25,6 +25,7 @@ class UploadService:
             raise ValueError("temp_id é obrigatório")
 
         nome_arquivo = payload.get("nome_arquivo")
+        dominio = payload.get("dominio")
 
         try:
             # 1) Persistir (gera empresa/arquivo/versao/registros)
@@ -32,6 +33,7 @@ class UploadService:
                 db=db,
                 temp_id=temp_id,
                 nome_arquivo=nome_arquivo,
+                dominio=dominio,  # ✅ AQUI
             )
 
             versao_id = resultado["versao_id"]
@@ -43,6 +45,8 @@ class UploadService:
             try:
                 # Sugestão: o scanner retorna a qtd de apontamentos e/ou lista de erros
                 scan_result = FiscalScanner.scan_versao(db=db, versao_id=versao_id)
+                resultado["apontamentos_gerados"] = scan_result["apontamentos_gerados"]
+                resultado["erros_regras"] = scan_result["erros_regras"]
 
                 # suporte a diferentes formatos de retorno
                 if isinstance(scan_result, dict):
@@ -57,14 +61,7 @@ class UploadService:
 
 
 
-
-
-            # 3) Response mais “produto”
-            scan = FiscalScanner.scan_versao(db, versao_id=resultado["versao_id"])
-            resultado["apontamentos_gerados"] = scan["apontamentos_gerados"]
-            resultado["erros_regras"] = scan["erros_regras"]
-
-            # 4 commit de tudo
+            # 3 commit de tudo
             db.commit()
             return resultado
 

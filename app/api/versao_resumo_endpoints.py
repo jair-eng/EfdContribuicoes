@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-
+import traceback
 from app.db.session import get_db
 from app.services.versao_resumo_service import VersaoResumoService
 
@@ -17,4 +17,5 @@ def resumo_versao(versao_id: int, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        traceback.print_exc()  # <-- imprime o erro real no terminal
+        raise HTTPException(status_code=400, detail=repr(e))  # <-- detail mais informativo

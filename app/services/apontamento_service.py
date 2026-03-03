@@ -2,7 +2,12 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 from app.db.models import EfdApontamento, EfdVersao, EfdArquivo
 from typing import List
-from app.services.c170_service import aplicar_correcao_ind_cafe_cst51, aplicar_correcao_ind_agro_cst51
+
+from app.fiscal.regras.Autocorrigivel.agro import aplicar_correcao_ind_agro_cst51
+from app.fiscal.regras.Autocorrigivel.cafe import aplicar_correcao_ind_cafe_cst51
+from app.fiscal.regras.Autocorrigivel.supermercado import aplicar_correcao_sup_limpeza_cst51_hibrido, \
+    aplicar_correcao_sup_embalagens_cst51_hibrido
+
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,64 @@ class ApontamentoService:
                     "AUTO-FIX IND_AGRO não alterou nenhum registro. "
                     "Não vou marcar apontamentos como resolvidos."
                 )
+
+        # 1.3) EMBALAGEM (depende de IND_AGRO/IND_CAFE existir; a própria regra só cria apontamento nesse caso)
+
+        if "EMB_INSUMO_V1" in codigos_pendentes:
+            print("[RESOLVER_TODOS] AUTO-FIX EMB_INSUMO_V1: INICIO")
+
+            res_fix = aplicar_correcao_sup_embalagens_cst51_hibrido(
+                db,
+                versao_origem_id=versao_id,
+                incluir_revenda=False,  # ✅ conservador (pode ligar depois se quiser)
+                csts_origem=["70", "73", "75", "98", "99", "06", "07", "08"],
+                apontamento_id=None,
+                motivo_codigo="EMB_INSUMO_V1",
+            )
+            db.flush()
+
+            if str(res_fix.get("status")) == "erro":
+                raise ValueError(f"AUTO-FIX EMBALAGEM falhou: {res_fix.get('msg')}")
+
+            alterados = int(res_fix.get("total_alterado") or 0)
+            total_alterado_fix += alterados
+
+            print("[RESOLVER_TODOS] AUTO-FIX EMB_INSUMO_V1: FIM alterados=", alterados, "res=", res_fix)
+
+            if alterados <= 0:
+                raise ValueError(
+                    "AUTO-FIX EMBALAGEM não alterou nenhum registro. "
+                    "Não vou marcar apontamentos como resolvidos."
+                )
+
+        # 1.4) LIMPEZA (depende de contexto de produção; regra já filtra isso)
+
+        if "SUP_LIMPEZA_INSUMO_V1" in codigos_pendentes:
+            print("[RESOLVER_TODOS] AUTO-FIX SUP_LIMPEZA_INSUMO_V1: INICIO")
+
+            res_fix = aplicar_correcao_sup_limpeza_cst51_hibrido(
+                db,
+                versao_origem_id=versao_id,
+                empresa_id=None,   # ou passe empresa_id se você já tiver aqui
+                apontamento_id=None,
+            )
+            db.flush()
+
+            if str(res_fix.get("status")) == "erro":
+                raise ValueError(f"AUTO-FIX LIMPEZA falhou: {res_fix.get('msg')}")
+
+            alterados = int(res_fix.get("total_alterado") or 0)
+            total_alterado_fix += alterados
+
+            print("[RESOLVER_TODOS] AUTO-FIX SUP_LIMPEZA_INSUMO_V1: FIM alterados=", alterados, "res=", res_fix)
+
+            # guard-rail
+            if alterados <= 0:
+                raise ValueError(
+                    "AUTO-FIX LIMPEZA não alterou nenhum registro. "
+                    "Não vou marcar apontamentos como resolvidos."
+                )
+
 
         # 2) Marca tudo como resolvido (comportamento atual)
         updated = (

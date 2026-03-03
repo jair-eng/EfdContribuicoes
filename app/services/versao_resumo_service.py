@@ -2,6 +2,9 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_
 from app.db.models import (EfdVersao , EfdRegistro, EfdApontamento, EfdArquivo , Empresa)
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from app.db.session import get_db   # ou onde seu get_db está definido
 
 
 class VersaoResumoService:
@@ -61,9 +64,25 @@ class VersaoResumoService:
                 func.sum(case((pendente_expr & (EfdApontamento.prioridade == "BAIXA"), 1), else_=0)).label("pendentes_baixa"),
             )
             .filter(EfdApontamento.versao_id == versao_id)
-            .one()
-        )
+            .one_or_none()
 
+        )
+        if not agg:
+            class _AggZero:
+                total = 0
+                pendentes = 0
+                resolvidos = 0
+                erros = 0
+                oportunidades = 0
+                pendentes_alta = 0
+                pendentes_media = 0
+                pendentes_baixa = 0
+                impacto_estimado_total = 0
+
+            agg = _AggZero()
+
+        print("DEBUG total_registros =", total_registros, flush=True)
+        print("DEBUG agg =", agg, type(agg), flush=True)
         return {
             "versao_id": int(versao_id),
             "status": versao.status,

@@ -3,8 +3,8 @@ from typing import Optional
 from collections import defaultdict
 
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.achado import Achado, Prioridade
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.achado import Achado, Prioridade
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 from app.config.settings import (
     ALIQUOTA_PIS,
     ALIQUOTA_COFINS,

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import logging
 
 from app.fiscal.dto import RegistroFiscalDTO
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 from app.config.settings import IND_AGRO_ALIQUOTA_EFETIVA
 from app.sped.utils_geral import _is_cafe_ou_graos, _is_cafe_by_ncm, _is_cafe_by_desc
 

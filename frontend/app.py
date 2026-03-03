@@ -4,6 +4,8 @@ import pandas as pd
 import sys
 from pathlib import Path
 
+
+
 ROOT = Path(__file__).resolve().parents[1]  # pasta Projeto_Sped
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -263,10 +265,22 @@ elif page == "0 — Importar SPED":
 
     st.divider()
 
+
     # ===========================
     # CONFIRM BATCH
     # ===========================
     st.subheader("Confirmar importação (lote)")
+    DOMINIOS = ["CAFE", "AGRO", "SUP", "POSTO", "GERAL"]
+    dominio_lote = st.selectbox(
+        "Domínio para os arquivos deste lote",
+        DOMINIOS,
+        index=0,
+    )
+
+    st.caption(
+        "Esse domínio será usado para criar/ajustar a empresa "
+        "(se necessário) ao confirmar o upload."
+    )
 
     if st.session_state.get("preview_items"):
         if st.button("✅ Confirmar importação dos válidos"):
@@ -274,6 +288,7 @@ elif page == "0 — Importar SPED":
                 {
                     "temp_id": item["temp_id"],
                     "nome_arquivo": item.get("nome_arquivo"),
+                    "dominio": dominio_lote,
                 }
                 for item in st.session_state.preview_items
             ]

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Dict, Any, Optional, Tuple
+
+from app.db.models import EfdRevisao
 from app.sped.logic.consolidador import _reg_of
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
@@ -224,3 +226,47 @@ def _to_dec(v: str) -> Decimal:
         return Decimal(s)
     except Exception:
         return Decimal("0.00")
+
+def _json_any(obj) -> Dict[str, Any]:
+    """
+    Tenta extrair o JSON da revisao de forma tolerante:
+    - revisao_json
+    - payload_json
+    - conteudo_json
+    - meta_json
+    """
+    for attr in ("revisao_json", "payload_json", "conteudo_json", "meta_json", "json"):
+        v = getattr(obj, attr, None)
+        if isinstance(v, dict) and v:
+            return v
+    return {}
+
+def carregar_ajustes_m(db, *, versao_id: int) -> List[Dict[str, Any]]:
+    rows = (
+        db.query(EfdRevisao)
+        .filter(
+            EfdRevisao.versao_revisada_id == int(versao_id),
+            EfdRevisao.acao == "AJUSTE_M",
+        )
+        .order_by(EfdRevisao.id.asc())
+        .all()
+    )
+
+    ajustes: List[Dict[str, Any]] = []
+    for r in rows:
+        j = r.revisao_json or {}
+        meta = j.get("meta") if isinstance(j, dict) and isinstance(j.get("meta"), dict) else j
+        if not isinstance(meta, dict) or not meta:
+            continue
+
+        meta2 = dict(meta)
+        meta2.setdefault("acao", "AJUSTE_M")
+        meta2.setdefault("versao_revisada_id", int(versao_id))
+        meta2.setdefault("revisao_id", int(r.id))
+
+        # ancoragem (opcional)
+        meta2.setdefault("registro_id_anchor", int(r.registro_id) if r.registro_id else None)
+
+        ajustes.append(meta2)
+
+    return ajustes

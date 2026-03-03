@@ -1,30 +1,31 @@
 from __future__ import annotations
 
-from sqlalchemy import text
 from collections import defaultdict
 from decimal import Decimal , InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from app.db.models import EfdRegistro, EfdApontamento
+from app.fiscal.constants import DOM_SUP, DOM_GERAL, DOMINIOS_VALIDOS
 from app.fiscal.dto import RegistroFiscalDTO
 from app.fiscal.scanners.c190 import montar_c190_agg
 from app.db.models.efd_versao import EfdVersao
 from app.db.models.efd_arquivo import EfdArquivo
 from app.fiscal.scanners.c100_entrada import montar_c100_entrada_relevante_agg
 from app.fiscal.ent_cat_fiscal import carregar_catalogo_fiscal
-from app.fiscal.regras.base_regras import RegraBase
 from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_export_agg, montar_c190_ind_torrado_agg, \
-    montar_c170_ind_torrado_agg
+    montar_c170_ind_torrado_agg, montar_c170_insumo_agg, montar_c170_sup_entrada_agg, montar_c170_saida_agg
+from app.fiscal.scanners.scanner_helpers import key_apontamento, norm_codigo, norm_prioridade, prioridade_por_impacto, \
+    safe_float
 from app.fiscal.varredura import executar_varredura
-from app.fiscal.regras.achado import Achado
+from app.fiscal.regras.Diagnostico.achado import Achado
 from app.fiscal.scanners.exportacao import montar_meta_fiscal
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
 from app.sped.blocoC.c170_utils import linhas_para_rows_like
 from app.fiscal.contexto import set_fiscal_context
-import re
 import logging
 
-from app.sped.utils_geral import consolidar_achados_c170_insumo_v2
+from app.sped.logic.consolidador import popular_pai_id
+from app.sped.utils_geral import consolidar_achados_c170_insumo_v2, _safe_json
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,13 @@ class FiscalScanner:
         - Executa motor fiscal
         - Persiste apontamentos preservando resolvidos (merge por chave lógica)
         """
+        print("[SCAN] db_id=", id(db), "versao_id=", versao_id)
 
         # -----------------------------
         # 0) Normalizações e contexto
         # -----------------------------
         versao_id = int(versao_id)
+        popular_pai_id(db, versao_id)
 
         if empresa_id is None:
             versao = db.get(EfdVersao, versao_id)
@@ -76,6 +79,8 @@ class FiscalScanner:
             .order_by(EfdRegistro.linha.asc())
             .all()
         )
+
+        rid_to_pai_id = {int(r.id): int(getattr(r, "pai_id", 0) or 0) for r in rows}
         linha_to_registro_id = {int(r.linha): int(r.id) for r in rows}
 
         # --- [OTIMIZAÇÃO DE PERFORMANCE: MAPAS EM MEMÓRIA] ---
@@ -111,46 +116,77 @@ class FiscalScanner:
         rows_limpas: list[Any] = []
         ids_pf_detectados: set[int] = set()
 
+        c100_pf_ids: set[int] = set()
         for r in rows_agg:
             reg_nome = str(getattr(r, "reg", "")).strip().upper()
             is_pf = False
 
-            # Identificação de Pessoa Física
             if reg_nome == "C100":
                 dados = (getattr(r, "conteudo_json", None) or {}).get("dados") or []
                 cod_part = str(dados[2]).strip() if len(dados) > 2 else None
                 is_pf = participantes_pf.get(cod_part, False)
 
+                if is_pf:
+                    rid_c100 = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
+                    if rid_c100:
+                        c100_pf_ids.add(rid_c100)
+
+                # ✅ NUNCA expurga C100
+                rows_limpas.append(r)
+                continue
+
+
             elif reg_nome == "C170":
-                id_pai = str(getattr(r, "pai_id", ""))
+
+                pai_id = int(getattr(r, "pai_id", 0) or 0)
+                # ✅ regra de ouro: se pai C100 é PF, corta C170
+                if pai_id and pai_id in c100_pf_ids:
+                    rid_pf = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
+                    if rid_pf:
+                        ids_pf_detectados.add(rid_pf)
+                    continue
+
+                # fallback antigo (se quiser manter)
+                id_pai = str(pai_id) if pai_id else str(getattr(r, "pai_id", ""))
                 cod_part = mapa_pai_participante.get(id_pai)
                 is_pf = participantes_pf.get(cod_part, False)
+                if is_pf:
+                    rid_pf = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
+                    if rid_pf:
+                        ids_pf_detectados.add(rid_pf)
+                    continue
+                rows_limpas.append(r)
 
-            if is_pf:
-                rid_pf = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
-                if rid_pf:
-                    ids_pf_detectados.add(rid_pf)
-                continue  # expurgo
-
+            # outros registros: mantém
             rows_limpas.append(r)
         # --- 2.2) ENRIQUECER rows_like com registro_id real (quando aplicar_revisoes=True) ---
         # Isso garante anchor_registro_id e evita registro_id=0 nos AGGs.
+
         for r in rows_limpas:
             try:
                 linha_r = int(getattr(r, "linha", 0) or 0)
                 if linha_r <= 0:
                     continue
 
+                # --- registro_id real (DB) ---
                 rid = int(getattr(r, "registro_id", 0) or 0)
                 if rid <= 0:
                     rid = int(linha_to_registro_id.get(linha_r, 0) or 0)
                     if rid > 0:
                         setattr(r, "registro_id", rid)
 
-                # opcional: alguns lugares ainda usam r.id
+                # --- id real (compat) ---
                 rid_id = int(getattr(r, "id", 0) or 0)
                 if rid_id <= 0 and rid > 0:
                     setattr(r, "id", rid)
+
+                # ✅ --- pai_id real (o que falta hoje) ---
+                pai_atual = int(getattr(r, "pai_id", 0) or 0)
+                if pai_atual <= 0:
+                    # usa o rid real (registro_id) como chave
+                    pai_db = int(rid_to_pai_id.get(int(rid), 0) or 0)
+                    if pai_db > 0:
+                        setattr(r, "pai_id", pai_db)
 
             except Exception:
                 pass
@@ -196,11 +232,13 @@ class FiscalScanner:
             reg_nome = str(getattr(l, "reg", "")).strip().upper()
 
             is_pessoa_fisica = False
-            if reg_nome in ("C100", "C170"):
-                pai_id = int(getattr(l, "pai_id", 0) or 0)
-                if rid_real in ids_pf_detectados or pai_id in ids_pf_detectados:
+            if reg_nome == "C100":
+                if rid_real in c100_pf_ids:
                     is_pessoa_fisica = True
-
+            elif reg_nome == "C170":
+                pai_id = int(getattr(l, "pai_id", 0) or 0)
+                if pai_id in c100_pf_ids or rid_real in ids_pf_detectados:
+                    is_pessoa_fisica = True
             # ✅ DADOS robusto (EfdRegistro e LinhaLogica)
             raw_dados = getattr(l, "dados", None)
 
@@ -274,6 +312,26 @@ class FiscalScanner:
                 pass
             dtos.append(c100_ent)
 
+        c170_saida = montar_c170_saida_agg(rows_limpas)
+
+        if c170_saida:
+            try:
+                c170_saida.versao_id = versao_id
+                c170_saida.empresa_id = empresa_id_ctx
+            except Exception:
+                pass
+            dtos.append(c170_saida)
+
+        c170_insumo = montar_c170_insumo_agg(rows_limpas)
+        if c170_insumo:
+            try:
+                c170_insumo.versao_id = versao_id
+                c170_insumo.empresa_id = empresa_id_ctx
+            except Exception:
+                pass
+            dtos.append(c170_insumo)
+
+
         c190_exp = montar_c190_export_agg(rows_limpas)
         if c190_exp:
             try:
@@ -301,6 +359,7 @@ class FiscalScanner:
                 pass
             dtos.append(c190_ind)
         else:
+
             c170_ind = montar_c170_ind_torrado_agg(rows_limpas)
             if c170_ind:
                 try:
@@ -327,57 +386,31 @@ class FiscalScanner:
                 print("[META_FISCAL DTO] dados=", d.dados, flush=True)
                 break
 
-        result = executar_varredura(dtos, capturar_erros=True)
+        dominio = DOM_GERAL
+        try:
+            versao = db.get(EfdVersao, versao_id)
+            if not versao:
+                raise ValueError("versao not found")
 
-        # -----------------------------
-        # Helpers
-        # -----------------------------
-        Number = Union[int, float, Decimal]
+            # override opcional (se existir a coluna na tabela)
+            dom_versao = (getattr(versao, "dominio", None) or "").strip().upper()
 
-        def _norm_codigo(c: Optional[str]) -> str:
-            return (str(c).strip() if c is not None else "").strip()
+            if dom_versao:
+                dominio = dom_versao
+            else:
+                emp = getattr(getattr(versao, "arquivo", None), "empresa", None)
+                dom_emp = (getattr(emp, "dominio", None) or "").strip().upper()
+                dominio = dom_emp or DOM_GERAL
 
-        def _prioridade_por_impacto(impacto) -> Optional[str]:
-            if impacto is None:
-                return None
-            try:
-                val = Decimal(str(impacto))
-            except (InvalidOperation, ValueError, TypeError):
-                return None
-            if val <= 0:
-                return None
-            if val >= Decimal("5000"):
-                return "ALTA"
-            if val >= Decimal("1000"):
-                return "MEDIA"
-            return "BAIXA"
+        except Exception:
+            dominio = DOM_GERAL
 
-        def _norm_prioridade(p) -> Optional[str]:
-            if p is None:
-                return None
-            if not isinstance(p, str):
-                p = str(p)
-            p = p.strip().upper()
-            if p == "MÉDIA":
-                p = "MEDIA"
-            return p if p in ("ALTA", "MEDIA", "BAIXA") else None
+        if dominio not in DOMINIOS_VALIDOS:
+            dominio = DOM_GERAL
 
-        def _safe_float(x) -> Optional[float]:
-            if x is None:
-                return None
-            try:
-                return float(x)
-            except Exception:
-                try:
-                    return float(str(x).replace(",", "."))
-                except Exception:
-                    return None
+        result = executar_varredura(dtos, capturar_erros=True, dominio=dominio)
 
-        def _key(registro_id: Optional[int], tipo: str, codigo: Optional[str]) -> Tuple[int, str, str]:
-            rid = int(registro_id) if registro_id is not None else 0
-            return (rid, str(tipo), _norm_codigo(codigo))
-
-        # -----------------------------
+                # -----------------------------
         # 6) Limpeza profissional (apaga pendentes e preserva resolvidos se solicitado)
         # -----------------------------
         q_del = db.query(EfdApontamento).filter(EfdApontamento.versao_id == versao_id)
@@ -396,12 +429,12 @@ class FiscalScanner:
                 .all()
             )
             for ap in resolved_rows:
-                existing_resolved[_key(ap.registro_id, ap.tipo, ap.codigo)] = ap
+                existing_resolved[key_apontamento(ap.registro_id, ap.tipo, ap.codigo)] = ap
 
         # -----------------------------
         # REFINAMENTO 1 — C100 não compete com C190
         # -----------------------------
-        tem_sum_c190 = any(_norm_codigo(a.codigo) == "C190-ENT" for a in result.apontamentos)
+        tem_sum_c190 = any(norm_codigo(a.codigo) == "C190-ENT" for a in result.apontamentos)
 
         # -----------------------------
         # REFINAMENTO 2 — Agregar C190 por (CFOP, CST) => cria C190-SUM
@@ -411,7 +444,7 @@ class FiscalScanner:
         consolidar_achados_c170_insumo_v2(result)
 
         for a in result.apontamentos:
-            if _norm_codigo(getattr(a, "codigo", None)) != "C190-ENT":
+            if norm_codigo(getattr(a, "codigo", None)) != "C190-ENT":
                 continue
 
             raw_meta = getattr(a, "meta", None) or {}
@@ -466,7 +499,7 @@ class FiscalScanner:
         # -----------------------------
         # 7) Inserir/atualizar apontamentos
         # -----------------------------
-        tem_cafe = any(_norm_codigo(x.codigo) == "CAFE_C190_V1" for x in result.apontamentos)
+        tem_cafe = any(norm_codigo(x.codigo) == "CAFE_C190_V1" for x in result.apontamentos)
 
         to_insert: List[EfdApontamento] = []
         to_update_mappings: List[dict] = []
@@ -485,7 +518,7 @@ class FiscalScanner:
             meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
 
             tipo = str(getattr(a, "tipo", "") or "").strip() or "OPORTUNIDADE"
-            codigo_norm = _norm_codigo(getattr(a, "codigo", None)) or None
+            codigo_norm = norm_codigo(getattr(a, "codigo", None)) or None
             descricao = str(getattr(a, "descricao", "") or "").strip()
             impacto = getattr(a, "impacto_financeiro", None)
 
@@ -515,8 +548,8 @@ class FiscalScanner:
                 )
                 continue
 
-            prio_regra = _norm_prioridade(getattr(a, "prioridade", None))
-            prioridade = prio_regra or _prioridade_por_impacto(impacto) or "BAIXA"
+            prio_regra = norm_prioridade(getattr(a, "prioridade", None))
+            prioridade = prio_regra or prioridade_por_impacto(impacto) or "BAIXA"
 
             if tem_sum_c190 and codigo_norm == "C100-ENT":
                 prioridade = "BAIXA"
@@ -526,7 +559,7 @@ class FiscalScanner:
                 if "Consolidado disponível" not in descricao:
                     descricao += " (Consolidado disponível em CAFE_C190_V1.)"
 
-            k = _key(rid, tipo, codigo_norm)
+            k = key_apontamento(rid, tipo, codigo_norm)
 
             if preservar_resolvidos and k in existing_resolved:
                 ap_exist = existing_resolved[k]
@@ -534,7 +567,7 @@ class FiscalScanner:
                     {
                         "id": ap_exist.id,
                         "descricao": descricao,
-                        "impacto_financeiro": _safe_float(impacto),
+                        "impacto_financeiro": safe_float(impacto),
                         "prioridade": prioridade,
                         "meta_json": meta,
                     }
@@ -548,10 +581,10 @@ class FiscalScanner:
                     tipo=tipo,
                     codigo=codigo_norm,
                     descricao=descricao,
-                    impacto_financeiro=_safe_float(impacto),
+                    impacto_financeiro=safe_float(impacto),
                     prioridade=prioridade,
                     resolvido=False,
-                    meta_json=meta,
+                    meta_json=_safe_json(meta),
                 )
             )
 

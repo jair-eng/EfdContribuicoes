@@ -1,10 +1,10 @@
 from app.fiscal.dto import RegistroFiscalDTO
 from decimal import Decimal, ROUND_HALF_UP
-from app.fiscal.regras.regra_m100_credito_pis import RegraM100CreditoPIS
-from app.fiscal.regras.base_regras import RegraBase
+from app.fiscal.regras.Diagnostico.regra_m100_credito_pis import RegraM100CreditoPIS
+from app.fiscal.regras.Diagnostico.base_regras import RegraBase
 
 
-class RegraM200CreditoCOFINS(RegraM100CreditoPIS,RegraBase):
+class RegraM200CreditoCOFINS(RegraM100CreditoPIS, RegraBase):
 
     def aplicar(self, registro: RegistroFiscalDTO):
         if registro.reg != "M200":
@@ -12,9 +12,11 @@ class RegraM200CreditoCOFINS(RegraM100CreditoPIS,RegraBase):
 
         dados = registro.dados or []
 
-        base = self.dec_br(dados[2]) if len(dados) > 2 else None
-        aliquota = self.dec_br(dados[3]) if len(dados) > 3 else None
-        credito = self.dec_br(dados[4]) if len(dados) > 4 else None
+        base = self._get_decimal(dados, self.IDX_BASE)
+        aliquota = self._get_decimal(dados, self.IDX_ALIQUOTA)
+
+        # para M200, o formato também costuma ter "|||CREDITO", então reutiliza o getter
+        credito = self._get_credito_m100(dados)
 
         if base is None or aliquota is None:
             return None
