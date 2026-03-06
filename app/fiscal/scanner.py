@@ -111,6 +111,23 @@ class FiscalScanner:
         else:
             rows_agg = rows
             fonte_base = rows
+        # --- 2.0) FILTRO POR SITUAÇÃO DO DOCUMENTO (C100 COD_SIT) ---
+        # COD_SIT: 06 = complementar / 07 = cancelada
+        c100_sit_skip_ids: set[int] = set()
+
+        for r in rows_agg:
+            reg_nome = str(getattr(r, "reg", "")).strip().upper()
+            if reg_nome != "C100":
+                continue
+
+            dados = (getattr(r, "conteudo_json", None) or {}).get("dados") or []
+            # no seu padrão: dados[4] = COD_SIT (porque dados[0]=IND_OPER, dados[2]=COD_PART, dados[4]=COD_SIT)
+            cod_sit = str(dados[4]).strip() if len(dados) > 4 else ""
+
+            if cod_sit in {"06", "07"}:
+                rid_c100 = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
+                if rid_c100:
+                    c100_sit_skip_ids.add(rid_c100)
 
         # --- 2.1) FILTRAGEM DE SEGURANÇA (O CORTE PF) ---
         rows_limpas: list[Any] = []
@@ -123,30 +140,33 @@ class FiscalScanner:
 
             if reg_nome == "C100":
                 dados = (getattr(r, "conteudo_json", None) or {}).get("dados") or []
+                rid_c100 = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
+
+                # ✅ NOVO: corta documento por COD_SIT (complementar/cancelada)
+                if rid_c100 and rid_c100 in c100_sit_skip_ids:
+                    continue  # não deixa agregadores verem esse C100
                 cod_part = str(dados[2]).strip() if len(dados) > 2 else None
                 is_pf = participantes_pf.get(cod_part, False)
-
                 if is_pf:
-                    rid_c100 = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
                     if rid_c100:
                         c100_pf_ids.add(rid_c100)
-
-                # ✅ NUNCA expurga C100
+                # ✅ mantém C100 (não-PF) no fluxo normal
                 rows_limpas.append(r)
                 continue
 
-
             elif reg_nome == "C170":
-
                 pai_id = int(getattr(r, "pai_id", 0) or 0)
+                # ✅ NOVO: se pai C100 é complementar/cancelado, corta C170
+                if pai_id and pai_id in c100_sit_skip_ids:
+                    continue
+
                 # ✅ regra de ouro: se pai C100 é PF, corta C170
                 if pai_id and pai_id in c100_pf_ids:
                     rid_pf = int(getattr(r, "registro_id", 0) or getattr(r, "id", 0) or 0)
                     if rid_pf:
                         ids_pf_detectados.add(rid_pf)
                     continue
-
-                # fallback antigo (se quiser manter)
+                # fallback antigo...
                 id_pai = str(pai_id) if pai_id else str(getattr(r, "pai_id", ""))
                 cod_part = mapa_pai_participante.get(id_pai)
                 is_pf = participantes_pf.get(cod_part, False)
@@ -224,6 +244,8 @@ class FiscalScanner:
         # 3) Converter para DTO (LIMPO E ROBUSTO COM REVISÕES)
         dtos: List[RegistroFiscalDTO] = []
 
+        # COD_SIT: 06 complementar / 07 cancelada
+        c100_sit_skip_ids: set[int] = set()
         for l in fonte_base:
             rid_real = int(getattr(l, "registro_id", 0) or 0)
             if rid_real <= 0:
@@ -253,6 +275,26 @@ class FiscalScanner:
                     raw_dados = rj.get("dados")
 
             dados_list = list(raw_dados or [])
+            # -------------------------------------------------
+            # ✅ FILTRO POR SITUAÇÃO DO DOCUMENTO (COD_SIT)
+            # - C100 COD_SIT 06/07: ignora documento e marca pai
+            # - C170 cujo pai está marcado: ignora item
+            # -------------------------------------------------
+            if reg_nome == "C100":
+                cod_sit = str(dados_list[4]).strip() if len(dados_list) > 4 else ""
+                if cod_sit in {"06", "07"}:
+                    if rid_real > 0:
+                        c100_sit_skip_ids.add(int(rid_real))
+
+
+            elif reg_nome == "C170":
+                pai_id = int(getattr(l, "pai_id", 0) or 0)
+                # fallback: se overlay não trouxe pai_id, busca no mapa do DB pelo rid_real
+                if pai_id <= 0 and rid_real > 0:
+                    pai_id = int(rid_to_pai_id.get(int(rid_real), 0) or 0)
+
+                if pai_id and pai_id in c100_sit_skip_ids:
+                    continue  # não cria DTO para item de doc complementar/cancelado
 
             meta: dict[str, Any] = {}
 

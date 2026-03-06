@@ -85,6 +85,14 @@ def confirmar_revisao(
         if not versao:
             raise HTTPException(404, "Versão não encontrada.")
 
+        if getattr(versao, "versao_revisada_id", None):
+            return {
+                "versao_id": int(versao_id),
+                "status": str(versao.status),
+                "pendentes_erro": 0,
+                "versao_revisada_id": int(versao.versao_revisada_id),
+            }
+
         if str(getattr(versao, "status", "")) != "EM_REVISAO":
             raise HTTPException(
                 status_code=400,

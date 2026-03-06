@@ -134,11 +134,31 @@ def revisar_c170_lote(
 
     total_alterado = 0
     total_ignorado_pf = 0
+    total_ignorado_sit = 0
+    sit_ignorados_detalhe: List[Dict[str, Any]] = []
     total_erros = 0
     erros_detalhe: List[Dict[str, Any]] = []  # top 10
 
     # Garante hierarquia pai_id populada
     popular_pai_id(db, versao_origem_id)
+
+    # ✅ mapa estrutural (estilo Foto): C170 -> último C100 anterior (por linha)
+    rows_min = (
+        db.query(EfdRegistro.id, EfdRegistro.reg)
+        .filter(EfdRegistro.versao_id == int(versao_origem_id))
+        .order_by(EfdRegistro.linha.asc())
+        .all()
+    )
+
+    c170_to_c100: dict[int, int] = {}
+    last_c100_id = 0
+    for rid, reg in rows_min:
+        reg_u = (reg or "").strip().upper()
+        if reg_u == "C100":
+            last_c100_id = int(rid)
+        elif reg_u == "C170":
+            if last_c100_id:
+                c170_to_c100[int(rid)] = int(last_c100_id)
 
     for item in alteracoes:
         reg_id = item.get("registro_id")
@@ -156,6 +176,37 @@ def revisar_c170_lote(
                 raise ValueError("Registro não pertence à versão informada")
             if (reg_db.reg or "").strip().upper() != "C170":
                 raise ValueError("Registro_id não é C170")
+
+            # 🛡️ TRAVA COD_SIT (C100 complementar/cancelada) — não depende de pai_id
+            c100_id = int(getattr(reg_db, "pai_id", 0) or 0)
+            if c100_id <= 0:
+                c100_id = int(c170_to_c100.get(int(reg_db.id), 0) or 0)
+
+            if c100_id > 0:
+                reg_c100 = db.get(EfdRegistro, int(c100_id))
+                if reg_c100 and (reg_c100.reg or "").strip().upper() == "C100":
+                    dados_c100 = _get_dados(reg_c100) or []
+                    off_c100 = 1 if dados_c100 and str(dados_c100[0]).strip().upper() == "C100" else 0
+                    cod_sit_raw = str(dados_c100[4 + off_c100]).strip() if len(dados_c100) > 4 + off_c100 else ""
+                    cod_sit = "".join(ch for ch in cod_sit_raw if ch.isdigit()).zfill(2)
+
+                    if cod_sit in {"06", "07"}:
+                        print("🧱 BLOQUEADO COD_SIT", cod_sit, "C170=", reg_db.id, "C100=", c100_id)
+                        total_ignorado_sit += 1
+                        if len(sit_ignorados_detalhe) < 20:
+                            sit_ignorados_detalhe.append({
+                                "status": "ignorado_cod_sit",
+                                "registro_id": int(reg_db.id),
+                                "c100_id": int(c100_id),
+                                "cod_sit": cod_sit,
+                            })
+                        resultados.append({
+                            "status": "ignorado_cod_sit",
+                            "registro_id": int(reg_db.id),
+                            "c100_id": int(c100_id),
+                            "msg": f"Ignorado: C100 COD_SIT={cod_sit} (complementar/cancelada)."
+                        })
+                        continue
 
             # 🛡️ TRAVA PF
             if reg_db.pai_id:
@@ -207,6 +258,7 @@ def revisar_c170_lote(
 
     print(
         f"✅ SUCESSO LOTE: Alterados (CNPJ)={total_alterado} | "
+        f"Ignorados (COD_SIT)={total_ignorado_sit} | "
         f"Ignorados (CPF)={total_ignorado_pf} | Erros={total_erros}"
     )
     print("LOTE> c100_afetados=", len(c100_afetados), "ex=", list(c100_afetados)[:5])
@@ -242,6 +294,8 @@ def revisar_c170_lote(
         "status": "ok",
         "total_alterado": total_alterado,
         "total_ignorado_pf": total_ignorado_pf,
+        "total_ignorado_sit": total_ignorado_sit,
+        "sit_ignorados_detalhe": sit_ignorados_detalhe,
         "total_erros": total_erros,
         "erros_detalhe": erros_detalhe,
         "detalhes": resultados,

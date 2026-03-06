@@ -93,31 +93,26 @@ def carregar_linhas_logicas_com_revisoes(
     print("LOADER> linhas:", len(linhas_finais))
     print("LOADER> revisoes carregadas:", len(revisoes_dict))
     print("LOADER> linhas alteradas:", len(alteradas))
+
     if alteradas:
         ex = alteradas[0]
-        print(
-            "LOADER> EXEMPLO:",
-            "registro_id=", ex.registro_id,
-            "linha=", ex.linha,
-            "reg=", ex.reg,
-            "cst_pis=", ex.dados[23] if len(ex.dados) > 23 else None,
-            "cst_cof=", ex.dados[29] if len(ex.dados) > 29 else None,
-        )
-        # DEBUG focado: confirmar vencedora do registro 1025
-        rid_debug = 1025
-        x = next((l for l in linhas_finais if int(getattr(l, "registro_id", 0) or 0) == rid_debug), None)
-        if x:
-            cst_pis = x.dados[23] if len(x.dados) > 23 else None
-            cst_cof = x.dados[29] if len(x.dados) > 29 else None
+        print("LOADER> EXEMPLO:", "registro_id=", ex.registro_id, "linha=", ex.linha, "reg=", ex.reg, "origem=",
+              ex.origem)
+
+        if str(ex.reg).upper() == "C170":
             print(
-                "LOADER> DEBUG rid=1025",
-                "origem=", getattr(x, "origem", None),
-                "revisao_id=", getattr(x, "revisao_id", None),
-                "cst_pis=", cst_pis,
-                "cst_cof=", cst_cof,
+                "LOADER> EXEMPLO CST:",
+                "cst_pis=", ex.dados[23] if len(ex.dados) > 23 else None,
+                "cst_cof=", ex.dados[29] if len(ex.dados) > 29 else None,
             )
-        else:
-            print("LOADER> DEBUG rid=1025 nao encontrado")
+
+    rid_debug = 1025
+    x = next((l for l in linhas_finais if int(getattr(l, "registro_id", 0) or 0) == rid_debug), None)
+    if x:
+        print("LOADER> DEBUG rid=1025", "reg=", x.reg, "origem=", x.origem, "revisao_id=",
+              getattr(x, "revisao_id", None))
+    else:
+        print("LOADER> DEBUG rid=1025 nao encontrado (normal se o id não existir nessa origem)")
 
     # ✅ Enriquecer linhas com pai_id do DB (mantém hierarquia no overlay)
     for l in linhas_finais:

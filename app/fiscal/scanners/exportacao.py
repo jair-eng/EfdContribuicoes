@@ -811,13 +811,13 @@ def montar_c170_sup_entrada_agg(registros_db: Sequence[EfdRegistro], *, cat: Any
 
 
 def montar_c170_saida_agg(registros_db: Sequence[EfdRegistro]) -> Optional[RegistroFiscalDTO]:
-    c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
+    c170s = [r for r in registros_db if (r.reg or "").strip().upper() == "C170"]
     if not c170s:
         return None
 
-    itens = []
-    anchor_linha = None
-    anchor_registro_id = None
+    itens: list[dict[str, Any]] = []
+    anchor_linha: int | None = None
+    anchor_registro_id: int | None = None
 
     for r in c170s:
         dados = (r.conteudo_json or {}).get("dados") or []
@@ -826,12 +826,12 @@ def montar_c170_saida_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regis
 
         cfop = str(dados[9] or "").strip()
 
-        # SAÍDAS
+        # SAÍDAS: 5/6/7
         if not (cfop and cfop[0] in ("5", "6", "7")):
             continue
 
-        # ICMS destacado (campo 12 no C170)
-        vl_icms = dados[12] if len(dados) > 12 else "0"
+        # ✅ VL_ICMS (índice correto)
+        vl_icms = dados[14] if len(dados) > 14 else "0"
 
         linha_r = int(getattr(r, "linha", 0) or 0)
         rid = int(getattr(r, "id", 0) or 0)
@@ -840,20 +840,21 @@ def montar_c170_saida_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regis
             anchor_linha = linha_r
             anchor_registro_id = rid
 
-
         itens.append({
             "cfop": cfop,
             "vl_icms": vl_icms,
             "linha": linha_r,
-            "registro_id": rid
+            "registro_id": rid,
         })
 
     if not itens or not anchor_linha:
         return None
 
+    meta = {"_meta": {"anchor_registro_id": int(anchor_registro_id or 0), "anchor_linha": int(anchor_linha)}}
+
     return RegistroFiscalDTO(
         id=int(anchor_registro_id or 0),
         reg="C170_SAIDA_AGG",
-        linha=anchor_linha,
-        dados=itens,
+        linha=int(anchor_linha),
+        dados=[meta] + itens,   # ✅ mantém contrato do scanner/regra
     )

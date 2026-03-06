@@ -367,6 +367,8 @@ def _normaliza_doc(s: Any) -> str:
     )
 
 
+
+
 def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
 
 
@@ -398,7 +400,7 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     off_c100 = offset_if_reg_first(dados_c100, "C100")
 
     cod_part = str(dados_c100[2 + off_c100]).strip()
-    chave = only_digits(dados_c100[8 + off_c100])
+    chave = only_digits(dados_c100[7 + off_c100])
     pfdbg(f"[PF] cod_part={cod_part}")
     pfdbg(f"[PF] chave={chave}")
 
@@ -408,48 +410,41 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
 
     # 3) Localizar o 0140 que precede este C100 ou que tenha o CNPJ da chave
     # IMPORTANTE: No SPED, os participantes de uma filial ficam após o 0140 dela.
-    target_0140 = None
-    if cnpj_filial_na_chave:
-        target_0140 = db.query(EfdRegistro).filter(
+    # 0140 do bloco (sempre por linha)
+    target_0140 = (
+        db.query(EfdRegistro)
+        .filter(
             EfdRegistro.versao_id == versao_id,
             EfdRegistro.reg == "0140",
-            EfdRegistro.id < reg_c100.id,  # O 0140 sempre vem antes do C100
-            func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[3]")).contains(cnpj_filial_na_chave)
-        ).order_by(EfdRegistro.id.desc()).first()
-
-    # Se não achou por CNPJ, pega o último 0140 antes do C100 (fallback físico)
+            EfdRegistro.linha < reg_c100.linha
+        )
+        .order_by(EfdRegistro.linha.desc())
+        .first()
+    )
     if not target_0140:
-        target_0140 = db.query(EfdRegistro).filter(
-            EfdRegistro.versao_id == versao_id,
-            EfdRegistro.reg == "0140",
-            EfdRegistro.id < reg_c100.id
-        ).order_by(EfdRegistro.id.desc()).first()
-
-    if not target_0140: return False
-    pfdbg(f"[PF] target_0140 id={getattr(target_0140, 'id', None)}")
+        return False
 
     # 4) Buscar o 0150 que está DEPOIS desse 0140 específico
     # mas ANTES do próximo 0140 (para não vazar participante de outra filial)
     prox_0140 = db.query(EfdRegistro).filter(
         EfdRegistro.versao_id == versao_id,
         EfdRegistro.reg == "0140",
-        EfdRegistro.id > target_0140.id
-    ).order_by(EfdRegistro.id.asc()).first()
+        EfdRegistro.linha > target_0140.linha
+    ).order_by(EfdRegistro.linha.asc()).first()
 
-    limite_id = prox_0140.id if prox_0140 else 9999999999
+    limite_linha = prox_0140.linha if prox_0140 else 10 ** 18
 
     reg_0150 = db.query(EfdRegistro).filter(
         EfdRegistro.versao_id == versao_id,
         EfdRegistro.reg == "0150",
-        EfdRegistro.id > target_0140.id,
-        EfdRegistro.id < limite_id
+        EfdRegistro.linha > target_0140.linha,
+        EfdRegistro.linha < limite_linha
     ).filter(
         or_(
             func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[0]")) == cod_part,
             func.json_unquote(func.json_extract(EfdRegistro.conteudo_json, "$.dados[1]")) == cod_part
         )
-    ).first()  # Pegamos o primeiro (e único) dentro do bloco da filial
-
+    ).first()
     if not reg_0150: return False
     pfdbg(f"[PF] 0150 id={getattr(reg_0150, 'id', None)}")
 

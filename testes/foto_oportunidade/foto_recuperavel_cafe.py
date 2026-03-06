@@ -564,6 +564,10 @@ def foto_recuperavel_ind_torrado(
     delta_desc_total = Decimal("0")
     itens_rows: List[FotoItemRow] = []
 
+    current_doc_ignorado = False
+    current_cod_sit = ""
+    docs_sit_ignorado = 0  # opcional: contador
+
     amostras_delta = 0
     MAX_AMOSTRAS = 30  # pra não poluir o log
     ######
@@ -582,11 +586,28 @@ def foto_recuperavel_ind_torrado(
                 current_num_doc = (fields[6] if len(fields) > 6 else "").strip()
                 current_dt_doc = (fields[8] if len(fields) > 8 else "").strip()
 
-                # C100: IND_OPER = fields[0] ('0' entrada / '1' saída)
+                # C100: IND_OPER = fields[0]
                 current_ind_oper = (fields[0] if len(fields) > 0 else "").strip()
 
                 # C100: COD_PART = fields[2]
                 cod_part = (fields[2] if len(fields) > 2 else "").strip()
+                current_cod_part = cod_part
+
+                # chave NF-e (no seu código é fields[7])
+                current_chv = (fields[7] if len(fields) > 7 else "").strip()
+
+                # C100: COD_SIT = fields[4]
+                current_cod_sit = (fields[4] if len(fields) > 4 else "").strip()
+                current_doc_ignorado = current_cod_sit in {"06", "07"}
+
+                if current_doc_ignorado:
+                    docs_sit_ignorado += 1  # opcional
+                    print(
+                        f"[FOTO][C100_SIT_SKIP] cod_sit={current_cod_sit} "
+                        f"num={current_num_doc} dt={current_dt_doc} cod_part={current_cod_part} chv={current_chv}"
+                    )
+                    continue  # ✅ importante: não processa PF/0150 etc. para esse doc
+
                 print("[DBG C100] COD_PART =", repr(cod_part))
 
                 info = (
@@ -595,7 +616,6 @@ def foto_recuperavel_ind_torrado(
                         or part_data_map.get(only_digits(cod_part).lstrip("0"))
                 )
 
-                # coleta TODOS 0150 daquele COD_PART
                 regs = [
                     v for k, v in part_data_map.items()
                     if k == cod_part or only_digits(k) == only_digits(cod_part)
@@ -618,12 +638,6 @@ def foto_recuperavel_ind_torrado(
                     current_doc_is_pf = True
                 else:
                     current_doc_is_pf = None
-                # >>> AGORA ESTES PASSAM A FUNCIONAR <<<
-
-                current_cod_part = cod_part
-
-                # chave NF-e
-                current_chv = (fields[7] if len(fields) > 7 else "").strip()
 
                 # guarda CPF/CNPJ do participante atual
                 if info:
@@ -634,8 +648,11 @@ def foto_recuperavel_ind_torrado(
                     current_cpf = ""
 
                 continue
-
             if reg == "C170":
+                # ✅ Se o C100 atual é complementar/cancelado, ignora todos os itens
+                if current_doc_ignorado:
+                    nao_vinculados_excluidos += 1  # ou crie um contador próprio
+                    continue
                 # 1) C170 antes de qualquer C100 = estrutura ruim -> bloqueia se configurado
                 if bloquear_c170_sem_c100 and not current_doc_tem_c100:
                     nao_vinculados_excluidos += 1

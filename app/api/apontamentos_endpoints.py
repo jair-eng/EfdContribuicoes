@@ -131,6 +131,21 @@ def reprocessar_apontamentos(
         if empresa_id is None:
             raise HTTPException(status_code=400, detail="Não foi possível resolver empresa_id para a versão.")
 
+        # ✅ FIX: garantir empresa_id persistido na versão
+        if getattr(versao, "empresa_id", None) is None:
+            versao.empresa_id = int(empresa_id)
+            db.add(versao)
+            db.flush()
+
+        # (opcional mas recomendado) gravar domínio da empresa
+        if not (getattr(versao, "dominio", None) or "").strip():
+            emp = getattr(getattr(versao, "arquivo", None), "empresa", None)
+            dom_emp = (getattr(emp, "dominio", None) or "").strip().upper() if emp else ""
+            if dom_emp:
+                versao.dominio = dom_emp
+                db.add(versao)
+                db.flush()
+
         res = FiscalScanner.scan_versao(
             db,
             versao_id=int(versao_id),

@@ -60,12 +60,14 @@ class ApontamentoService:
 
             print("[RESOLVER_TODOS] AUTO-FIX IND_CAFE_V1: FIM alterados=", alterados, "res=", res_fix)
 
-            # ✅ guard-rail: não “resolve tudo” se não aplicou nada
+            # ✅ guard-rail: 0 alterações = SKIP (não é erro) e NÃO marca resolvidos
             if alterados <= 0:
-                raise ValueError(
-                    "AUTO-FIX IND_CAFE não alterou nenhum registro. "
-                    "Não vou marcar apontamentos como resolvidos."
-                )
+                print("[RESOLVER_TODOS] AUTO-FIX IND_CAFE_V1: SKIP (0 alterações) -> não marcar resolvidos")
+                res_fix["status"] = "skip"
+                res_fix["msg"] = res_fix.get("msg") or "0 alterações (nada a aplicar). Mantendo apontamentos pendentes."
+                # opcional: você pode querer registrar em um acumulador de skips
+                # total_skips += 1
+
 
         # 1.2) AGRO
         # ✅ aqui você decide: por enquanto pode deixar DESLIGADO (comentado),
