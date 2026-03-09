@@ -114,6 +114,9 @@ class RegraIndustrializacaoCafeV1(RegraBase):
 
                 cfop = str(it.get("cfop") or "").strip()
                 vl_opr = it.get("vl_opr")
+                vl_item = it.get("vl_item")
+                vl_desc = it.get("vl_desc")
+                vl_icms = it.get("vl_icms")
                 rid = it.get("registro_id")
 
                 if not cfop:
@@ -132,16 +135,24 @@ class RegraIndustrializacaoCafeV1(RegraBase):
 
                 # valor
                 try:
-                    val = self.dec_br(vl_opr) or Decimal("0")
+                    if reg == "C170_IND_TORRADO_AGG":
+                        val_item = self.dec_br(vl_item) or Decimal("0")
+                        val_desc = self.dec_br(vl_desc) or Decimal("0")
+                        val_icms = self.dec_br(vl_icms) or Decimal("0")
+                        val = val_item - val_desc - val_icms
+                    else:
+                        val = self.dec_br(vl_opr) or Decimal("0")
                 except Exception as e:
                     if skips_logados < self.DEBUG_MAX_SKIPS:
                         logger.debug(
-                            "IND_CAFE skip rid=%s cfop=%s: vl_opr inválido (%s) err=%s",
-                            rid, cfop, vl_opr, e
+                            "IND_CAFE skip rid=%s reg=%s cfop=%s: valor inválido (vl_opr=%s vl_item=%s vl_desc=%s vl_icms=%s) err=%s",
+                            rid, reg, cfop, vl_opr, vl_item, vl_desc, vl_icms, e
                         )
                         skips_logados += 1
                     continue
 
+                if val < 0:
+                    val = Decimal("0")
                 if val <= 0:
                     continue
 

@@ -302,13 +302,18 @@ def montar_c170_export_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
             continue
 
         vl_item = dados[5] if len(dados) > 5 else "0"
+        vl_desc = dados[6] if len(dados) > 6 else "0"
+        vl_icms = dados[13] if len(dados) > 13 else "0"
 
         if anchor is None or int(r.id) < int(anchor.id):
             anchor = r
 
         itens.append({
             "cfop": cfop,
-            "vl_opr": vl_item,  # string "404,16" -> regra converte
+            "vl_opr": vl_item,  # mantém compatibilidade
+            "vl_item": vl_item,
+            "vl_desc": vl_desc,
+            "vl_icms": vl_icms,
             "registro_id": r.id,
             "pai_id": getattr(r, "pai_id", None)
         })
@@ -473,14 +478,19 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     map_item_desc: dict[str, str] = {}
     map_item_ncm: dict[str, str] = {}
 
+    # --------------------------------------------
+    # 0200 -> mapa COD_ITEM -> (DESC, NCM)
+    # --------------------------------------------
     for r in registros_db:
         if (r.reg or "").strip() != "0200":
             continue
+
         d = (r.conteudo_json or {}).get("dados") or []
-        # d[0]=COD_ITEM, d[1]=DESCR_ITEM, d[6]=COD_NCM (layout padrão)
+
         cod = str(d[0] or "").strip() if len(d) > 0 else ""
         desc = str(d[1] or "").strip() if len(d) > 1 else ""
         ncm_raw = str(d[6] or "").strip() if len(d) > 6 else ""
+
         ncm = "".join(ch for ch in ncm_raw if ch.isdigit())
 
         if cod:
@@ -489,9 +499,9 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
             if ncm:
                 map_item_ncm[cod] = ncm
 
-    # ---------------------------------------------------------
-    # 1) Identificação rápida dos registros presentes
-    # ---------------------------------------------------------
+    # --------------------------------------------
+    # Identificação dos registros presentes
+    # --------------------------------------------
     regs_presentes = {(r.reg or "").strip() for r in registros_db}
 
     flags = {
@@ -499,13 +509,13 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         "tem_1210": "1210" in regs_presentes,
         "tem_1700": "1700" in regs_presentes,
     }
+
     flags.update(coletar_flags_bloco_m(registros_db))
 
-    # ---------------------------------------------------------
-    # 2) Filtragem de C170
-    # ---------------------------------------------------------
+    # --------------------------------------------
+    # Filtragem de C170
+    # --------------------------------------------
     c170s = [r for r in registros_db if (r.reg or "").strip() == "C170"]
-
 
     if not c170s:
         return None
@@ -513,9 +523,9 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
     itens: List[Dict[str, Any]] = []
     anchor_linha: Optional[int] = None
 
-    # ---------------------------------------------------------
-    # 3) Loop de agregação
-    # ---------------------------------------------------------
+    # --------------------------------------------
+    # Loop de agregação
+    # --------------------------------------------
     for r in c170s:
 
         dados = (r.conteudo_json or {}).get("dados") or []
@@ -524,33 +534,49 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
             continue
 
         cfop = str(dados[9] or "").strip()
+
         if not _cfop_gate_entrada_compra(cfop):
             continue
 
+        # -----------------------------
+        # Valores do item
+        # -----------------------------
         vl_item = dados[5] if len(dados) > 5 else "0"
+        vl_desc = dados[6] if len(dados) > 6 else "0"
+        vl_icms = dados[13] if len(dados) > 13 else "0"
 
-        # COD_ITEM (no seu projeto, normalmente é dados[1])
+        # -----------------------------
+        # Item / NCM
+        # -----------------------------
         cod_item = pick_cod_item_c170(dados)
 
-        # NCM vem do 0200 (catálogo de itens)
         ncm = map_item_ncm.get(cod_item, "") if cod_item else ""
         descricao = map_item_desc.get(cod_item, "") if cod_item else ""
 
+        # -----------------------------
+        # Linha
+        # -----------------------------
         linha_r = int(getattr(r, "linha", 0) or 0)
+
         if linha_r > 0 and (anchor_linha is None or linha_r < anchor_linha):
             anchor_linha = linha_r
 
-        # ✅ ID real do registro (única fonte de verdade)
+        # -----------------------------
+        # ID real
+        # -----------------------------
         rid_real = int(getattr(r, "id", 0) or 0)
+
         if rid_real <= 0:
             rid_real = int(getattr(r, "registro_id", 0) or 0)
 
-        # ✅ ancora no 1º registro real que virou item válido
         if flags.get("anchor_registro_id") is None and rid_real > 0:
             flags["anchor_registro_id"] = rid_real
+
         itens.append({
             "cfop": cfop,
-            "vl_opr": vl_item,
+            "vl_item": vl_item,
+            "vl_desc": vl_desc,
+            "vl_icms": vl_icms,
             "ncm": ncm,
             "descricao": descricao,
             "cod_item": cod_item,
@@ -569,32 +595,32 @@ def montar_c170_ind_torrado_agg(registros_db: Sequence[EfdRegistro]) -> Optional
         print("[C170_AGG] abortando (sem anchor_linha)")
         return None
 
-    # ---------------------------------------------------------
-    # 4) Atualização de indicadores de perfil
-    # ---------------------------------------------------------
+    # --------------------------------------------
+    # Atualização de indicadores
+    # --------------------------------------------
     flags.update(coletar_creditos_bloco_m(registros_db))
 
     perfil_monofasico, score_monofasico = detectar_perfil_monofasico(registros_db)
+
     flags["perfil_monofasico"] = perfil_monofasico
     flags["score_monofasico"] = score_monofasico
     flags["fonte"] = "C170"
 
-    # Rastreabilidade
     flags["anchor_reg_base"] = "C170"
     flags["anchor_linha"] = anchor_linha
     flags.setdefault("anchor_registro_id", None)
-    flags["tem_indicio_agro"] = _detectar_indicio_agro_0200(registros_db)
 
+    flags["tem_indicio_agro"] = _detectar_indicio_agro_0200(registros_db)
 
     dados_final: List[Any] = [{"_meta": flags}] + itens
 
-    # ---------------------------------------------------------
-    # 5) Retorno do DTO agregado
-    # ---------------------------------------------------------
+    # --------------------------------------------
+    # Retorno
+    # --------------------------------------------
     anchor_id = int(flags.get("anchor_registro_id") or 0)
 
     return RegistroFiscalDTO(
-        id=anchor_id,  # ✅ ancora
+        id=anchor_id,
         reg="C170_IND_TORRADO_AGG",
         linha=anchor_linha,
         dados=dados_final,
@@ -647,6 +673,9 @@ def montar_c170_insumo_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
 
         # valores padrão do teu parser
         vl_item = dados[5] if len(dados) > 5 else "0"
+        vl_desc = dados[6] if len(dados) > 6 else "0"
+        vl_icms = dados[13] if len(dados) > 13 else "0"
+
         cst_pis = str(dados[23] or "").strip() if len(dados) > 23 else ""
         cst_cof = str(dados[29] or "").strip() if len(dados) > 29 else ""
 
@@ -667,6 +696,8 @@ def montar_c170_insumo_agg(registros_db: Sequence[EfdRegistro]) -> Optional[Regi
         itens.append({
             "cfop": cfop,
             "vl_item": vl_item,
+            "vl_desc": vl_desc,
+            "vl_icms": vl_icms,
             "cst_pis": cst_pis,
             "cst_cofins": cst_cof,
             "ncm": ncm,
@@ -757,6 +788,8 @@ def montar_c170_sup_entrada_agg(registros_db: Sequence[EfdRegistro], *, cat: Any
             continue
 
         vl_item = dados[5] if len(dados) > 5 else "0"
+        vl_desc = dados[6] if len(dados) > 6 else "0"
+        vl_icms = dados[13] if len(dados) > 13 else "0"
         cst_pis = str(dados[23] or "").strip() if len(dados) > 23 else ""
         cst_cof = str(dados[29] or "").strip() if len(dados) > 29 else ""
 
@@ -778,6 +811,8 @@ def montar_c170_sup_entrada_agg(registros_db: Sequence[EfdRegistro], *, cat: Any
             "cst_pis": cst_pis,
             "cst_cofins": cst_cof,
             "ncm": ncm,
+            "vl_desc": vl_desc,
+            "vl_icms": vl_icms,
             "descricao": descricao,
             "cod_item": cod_item,
             "registro_id": rid_real,

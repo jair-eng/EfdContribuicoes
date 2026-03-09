@@ -683,11 +683,26 @@ def foto_recuperavel_ind_torrado(
 
                 # --- agora sim: extrair campos ---
                 vl_item = dec_br(fields[5]) if len(fields) > 5 else Decimal("0")
+                vl_desc = dec_br(fields[6]) if len(fields) > 6 else Decimal("0")
+                vl_icms = dec_br(fields[13]) if len(fields) > 13 else Decimal("0")
+                vl_ipi = dec_br(fields[17]) if len(fields) > 17 else Decimal("0")
+
+                vl_bc_pis = dec_br(fields[24]) if len(fields) > 24 else Decimal("0")
+                vl_bc_cof = dec_br(fields[30]) if len(fields) > 30 else Decimal("0")
+
+                base_item_liquida = vl_item - vl_desc - vl_icms
+                if base_item_liquida < 0:
+                    base_item_liquida = Decimal("0")
+
+                delta_base_pis_total += (base_item_liquida - vl_bc_pis)
+                delta_base_cof_total += (base_item_liquida - vl_bc_cof)
+                delta_desc_total += vl_desc
+
                 cfop = (fields[9] if len(fields) > 9 else "").strip()
                 cst_pis = (fields[23] if len(fields) > 23 else "").strip()
                 cod_item = (fields[1] if len(fields) > 1 else "").strip()
 
-                # contábil: COD_CTA vem no final do C170 (no seu exemplo: 55)
+                # contábil: COD_CTA vem no final do C170
                 cod_cta_item = (fields[-1] if fields else "").strip()
                 cod_cta_final = cod_cta_item or ""
                 conta_nome, conta_classif = conta_map.get(cod_cta_final, ("", ""))
@@ -722,7 +737,7 @@ def foto_recuperavel_ind_torrado(
 
                 # ✅ (A) já é crédito (CST 50-56)
                 if cst_pis in CST_CREDITO:
-                    base_credito_existente += vl_item
+                    base_credito_existente += base_item_liquida
                     itens_incluidos += 1
                     cfops_seen[cfop] = cfops_seen.get(cfop, 0) + 1
                     csts_seen[cst_pis] = csts_seen.get(cst_pis, 0) + 1
@@ -763,7 +778,7 @@ def foto_recuperavel_ind_torrado(
 
                 # ✅ (B) vai virar crédito com as alterações (CST origem)
                 if cst_pis in csts_origem:
-                    base_credito_geravel += vl_item
+                    base_credito_geravel += base_item_liquida
                     itens_incluidos += 1
                     cfops_seen[cfop] = cfops_seen.get(cfop, 0) + 1
                     csts_seen[cst_pis] = csts_seen.get(cst_pis, 0) + 1
@@ -808,19 +823,20 @@ def foto_recuperavel_ind_torrado(
                 # demais CSTs: fora do escopo do Foto
                 continue
 
+    base_credito_existente = base_credito_existente
+    base_credito_geravel = base_credito_geravel
 
-    base_credito_existente = q2(base_credito_existente)
-    base_credito_geravel = q2(base_credito_geravel)
-    base_total_credito = q2(base_credito_existente + base_credito_geravel)
+    base_total_credito = base_credito_existente + base_credito_geravel
+    base_total_credito = q2(base_total_credito)
 
-    credito_pis = q2(base_total_credito * ALIQUOTA_PIS)
-    credito_cof = q2(base_total_credito * ALIQUOTA_COF)
+    credito_pis = base_total_credito * ALIQUOTA_PIS
+    credito_cof = base_total_credito * ALIQUOTA_COF
     credito_total = q2(credito_pis + credito_cof)
 
     print("\n[FOTO][RESUMO_DELTAS]")
-    print("  delta_base_pis_total (VL_ITEM - VL_BC_PIS) =", fmt_br(q2(delta_base_pis_total)))
-    print("  delta_base_cof_total (VL_ITEM - VL_BC_COF) =", fmt_br(q2(delta_base_cof_total)))
-    print("  total_vl_desc (soma VL_DESC)               =", fmt_br(q2(delta_desc_total)))
+    print("  delta_base_pis_total (BASE_LIQ - VL_BC_PIS) =", fmt_br(q2(delta_base_pis_total)))
+    print("  delta_base_cof_total (BASE_LIQ - VL_BC_COF) =", fmt_br(q2(delta_base_cof_total)))
+    print("  total_vl_desc (soma VL_DESC)                =", fmt_br(q2(delta_desc_total)))
 
     # Se você tem o crédito do M (export/PVA) em mãos, você consegue checar a base equivalente:
     # base_equiv_pis = q2((credito_pis - credito_pis_m) / ALIQUOTA_PIS)

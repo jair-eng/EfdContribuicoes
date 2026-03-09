@@ -131,7 +131,11 @@ class RegraEmbalagemInsumoV1(RegraBase):
                 if not (emb_39 or emb_48 or emb_73):
                     continue
 
-                val = self.dec_br(it.get("vl_item") or it.get("vl_opr")) or Decimal("0")
+                vl_item = self.dec_br(it.get("vl_item")) or Decimal("0")
+                vl_desc = self.dec_br(it.get("vl_desc")) or Decimal("0")
+                vl_icms = self.dec_br(it.get("vl_icms")) or Decimal("0")
+
+                val = vl_item - vl_desc - vl_icms
                 if val <= 0:
                     continue
 

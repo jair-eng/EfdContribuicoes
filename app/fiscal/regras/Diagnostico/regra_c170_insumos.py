@@ -91,15 +91,20 @@ class RegraC170Insumos(RegraBase):
                 #     continue
 
                 # valor do item
+                # valor do item / base líquida
                 vl_item = self.dec_br(it.get("vl_item")) or Decimal("0")
-                if vl_item <= 0:
+                vl_desc = self.dec_br(it.get("vl_desc")) or Decimal("0")
+                vl_icms = self.dec_br(it.get("vl_icms")) or Decimal("0")
+
+                base_liquida = vl_item - vl_desc - vl_icms
+                if base_liquida <= 0:
                     continue
 
                 qtd_candidatos += 1
-                base_total += vl_item
-                base_por_cfop[cfop] += vl_item
+                base_total += base_liquida
+                base_por_cfop[cfop] += base_liquida
                 if ncm:
-                    base_por_ncm[ncm] += vl_item
+                    base_por_ncm[ncm] += base_liquida
                 if cst_pis:
                     csts_pis[cst_pis] += 1
                 if cst_cof:
@@ -140,8 +145,8 @@ class RegraC170Insumos(RegraBase):
             top_cst_cof = [c for c, _ in sorted(csts_cof.items(), key=lambda kv: kv[1], reverse=True)[:5]]
 
             desc = (
-                f"Possível crédito por insumo (agrupado): {qtd_candidatos} item(ns) candidato(s) "
-                f"em entradas (CFOP catálogo). Base somada VL_ITEM ≈ R$ {self.fmt_br(base_total)}. "
+                 f"Possível crédito por insumo (agrupado): {qtd_candidatos} item(ns) candidato(s) "
+                f"em entradas (CFOP catálogo). Base líquida (VL_ITEM - VL_DESC - VL_ICMS) ≈ R$ {self.fmt_br(base_total)}. "
                 f"CFOP(s) top: {', '.join(top_cfops) or 'N/D'}. "
                 f"NCM(s) top: {', '.join(top_ncms) or 'N/D'}. "
                 f"CST PIS top: {', '.join(top_cst_pis) or 'N/D'}, CST COFINS top: {', '.join(top_cst_cof) or 'N/D'}. "
@@ -159,12 +164,13 @@ class RegraC170Insumos(RegraBase):
                 "fonte_base": "C170_INSUMO_AGG",
                 "qtd_total_itens": int(qtd_total),
                 "qtd_candidatos": int(qtd_candidatos),
-                "base_total_vl_item": str(base_total),
+                "base_total_liquida": str(base_total),
                 "top_cfops": top_cfops,
                 "top_ncms": top_ncms,
                 "top_cst_pis": top_cst_pis,
                 "top_cst_cofins": top_cst_cof,
                 "sample_registro_ids": candidatos_ids,
+                "criterio_base": "VL_ITEM - VL_DESC - VL_ICMS",
                 "slugs": {
                     "cfop_entrada": self.SLUG_CFOP_ENTRADA,
                     "cst_pis_alvo_credito": self.SLUG_CST_PIS_ALVO_CRED,

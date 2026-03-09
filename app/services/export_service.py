@@ -152,6 +152,15 @@ def exportar_sped(
             if vl_item <= 0:
                 continue
 
+            vl_desc = dec_br(dados[LAYOUT_C170.idx_vl_desc]) if len(dados) > LAYOUT_C170.idx_vl_desc else Decimal(
+                "0.00")
+            vl_icms = dec_br(dados[LAYOUT_C170.idx_vl_icms]) if len(dados) > LAYOUT_C170.idx_vl_icms else Decimal(
+                "0.00")
+
+            base_liquida = vl_item - vl_desc - vl_icms
+            if base_liquida <= 0:
+                continue
+
             # ---------------------------
             # CFOP + ENTRADA (guard-rails)
             # ---------------------------
@@ -188,7 +197,7 @@ def exportar_sped(
             # ---------------------------
             # Soma (agora já filtrado)
             # ---------------------------
-            base_por_cst[cst_pis] = base_por_cst.get(cst_pis, Decimal("0.00")) + vl_item
+            base_por_cst[cst_pis] = base_por_cst.get(cst_pis, Decimal("0.00")) + base_liquida
             qtd_itens += 1
 
         base_total = sum(base_por_cst.values(), Decimal("0.00")).quantize(Decimal("0.01"), ROUND_HALF_UP)
