@@ -1,0 +1,70 @@
+Metadata-Version: 2.4
+Name: oslo.messaging
+Version: 17.2.0
+Summary: Oslo Messaging API
+Author-email: OpenStack <openstack-discuss@lists.openstack.org>
+Project-URL: Homepage, https://docs.openstack.org/oslo.messaging
+Project-URL: Repository, https://opendev.org/openstack/oslo.messaging
+Classifier: Environment :: OpenStack
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Information Technology
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Requires-Python: >=3.10
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+License-File: AUTHORS
+Requires-Dist: pbr>=2.0.0
+Requires-Dist: futurist>=1.2.0
+Requires-Dist: oslo.config>=5.2.0
+Requires-Dist: oslo.context>=5.3.0
+Requires-Dist: oslo.log>=3.36.0
+Requires-Dist: oslo.utils>=3.37.0
+Requires-Dist: oslo.serialization>=2.18.0
+Requires-Dist: oslo.service>=1.24.0
+Requires-Dist: stevedore>=1.20.0
+Requires-Dist: debtcollector>=1.2.0
+Requires-Dist: cachetools>=2.0.0
+Requires-Dist: WebOb>=1.7.1
+Requires-Dist: PyYAML>=3.13
+Requires-Dist: amqp>=2.5.2
+Requires-Dist: kombu>=4.6.8
+Requires-Dist: oslo.middleware>=3.31.0
+Requires-Dist: oslo.metrics>=0.2.1
+Provides-Extra: kafka
+Requires-Dist: confluent-kafka>=1.3.0; extra == "kafka"
+Dynamic: license-file
+Dynamic: requires-dist
+
+======================
+Oslo Messaging Library
+======================
+
+.. image:: https://governance.openstack.org/tc/badges/oslo.messaging.svg
+
+.. Change things from this point on
+
+.. image:: https://img.shields.io/pypi/v/oslo.messaging.svg
+    :target: https://pypi.org/project/oslo.messaging/
+    :alt: Latest Version
+
+.. image:: https://img.shields.io/pypi/dm/oslo.messaging.svg
+    :target: https://pypi.org/project/oslo.messaging/
+    :alt: Downloads
+
+The Oslo messaging API supports RPC and notifications over a number of
+different messaging transports.
+
+* License: Apache License, Version 2.0
+* Documentation: https://docs.openstack.org/oslo.messaging/latest/
+* Source: https://opendev.org/openstack/oslo.messaging
+* Bugs: https://bugs.launchpad.net/oslo.messaging
+* Release notes: https://docs.openstack.org/releasenotes/oslo.messaging/

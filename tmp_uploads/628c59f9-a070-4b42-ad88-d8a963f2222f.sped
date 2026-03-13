@@ -1,0 +1,257 @@
+|0000|006|0|||01092022|30092022|SERGINHO COMERCIO E BENEFICIAMENTO DE CAFE - LTDA|46325480000161|MG|3154002||00|2|
+|0001|0|
+|0100|BEATRIZ DE LOURDES OLIVEIRA|09990393699|MG126938O5|46732296000136|35300040|RUA CORONEL PEDRO MARTINS|176|- SALA 203|CENTRO|3399766409||oliveira.beatriz23@hotmail.com|3113404|
+|0110|1|1|1||
+|0140|46325480000161|SERGINHO COMERCIO E BENEFICIAMENTO DE CAFE - LTDA|46325480000161|MG|0043372920031|3154002|||
+|0150|C00681184000100|GARDINGO TRADE IMPORTACAO E EXPORTACAO L|1058|00681184000100||4099632320017|3140902||FAZENDA SANTA MARIA|003||ZONA RURAL|
+|0150|F00681184000100|GARDINGO TRADE IMPORTACAO E EXPORTACAO L|1058|00681184000100||4099632320017|3140902||FAZENDA SANTA MARIA|03||ZONA RURAL|
+|0190|KGS|Unidade Importada Nfe|
+|0190|SC|Unidade Importada Nfe|
+|0190|SCS|Unidade Importada Nfe|
+|0200|1000000000016|CAFE EM GRAOS CRU ARABICA|1000000000016||SC|00|09011110||09|||
+|0200|fornec_4|CAFE CRU NAO DESCAFEINADO EM GRAO ARABICA|||KGS|00|09011110||09|||
+|0400|0000000001|VENDA DE MERCADORIA ADQUIRIDA OU RECEBIDA DE TERCE|
+|0400|0000000002|DEVOLUCAO COMPRA PARA COMERCIALIZACAO|
+|0500|01012014|04|A|5|25666|MERCADORIA|||
+|0990|16|
+|A001|1|
+|A990|2|
+|C001|0|
+|C010|46325480000161|2|
+|C100|0|1|F00681184000100|55|00|1|96967|31220900681184000100550010000969671096967149|02092022|02092022|3444,3|0|0|0|3444,3|9|0|0|0|0|0|0|0|0|56,83|261,77|||
+|C170|1|fornec_4||160,2|KGS|3444,3|0|0|051|1202|0000000002|0|0|0|0|0|0||||0|0|0|73|3444,3|1,65|||56,83|73|3444,3|7,6|||261,77|25666|
+|C100|1|0|C00681184000100|55|00|1|27|31220946325480000161550010000000271403465607|02092022|02092022|317500|0|0|0|317500|0|0|0|0|0|0|0|0|0|0|0|||
+|C170|1|1000000000016||250|SCS|317500|0|0|051|5102||0|0|0|0|0|0||||0|0|0|06|317500|0|||0|06|317500|0|||0|25666|
+|C100|1|0|C00681184000100|55|00|1|28|31220946325480000161550010000000281638650738|06092022|06092022|2743,19|0|0|0|2743,19|0|0|0|0|0|0|0|0|0|0|0|||
+|C170|1|1000000000016||2,16|SCS|2743,19|0|0|051|5102||0|0|0|0|0|0||||0|0|0|06|2743,19|0|||0|06|2743,19|0|||0|25666|
+|C990|9|
+|D001|1|
+|D990|2|
+|F001|1|
+|F990|2|
+|I001|1|
+|I990|2|
+|M001|0|
+|M100|101|0|3444,3|1,65|0||56,83|0|0|0|56,83|1|0|56,83|
+|M105|12|50|3444,3|0|3444,3|3444,3||||
+|M200|0|0|0|0|0|0|0|0|0|0|0|0|
+|M400|06|320243,19|25666||
+|M410|123|320243,19|25666||
+|M500|101|0|3444,3|7,6|0||261,77|0|0|0|261,77|1|0|261,77|
+|M505|12|50|3444,3|0|3444,3|3444,3||||
+|M600|0|0|0|0|0|0|0|0|0|0|0|0|
+|M800|06|320243,19|25666||
+|M810|123|320243,19|25666||
+|M990|12|
+|P001|1|
+|P990|2|
+|1001|1|
+|1990|2|
+|9001|0|
+|9900|0000|1|
+|9900|0001|1|
+|9900|0100|1|
+|9900|0110|1|
+|9900|0140|1|
+|9900|0150|2|
+|9900|0190|3|
+|9900|0200|2|
+|9900|0400|2|
+|9900|0500|1|
+|9900|0990|1|
+|9900|1001|1|
+|9900|1990|1|
+|9900|9001|1|
+|9900|9990|1|
+|9900|9999|1|
+|9900|A001|1|
+|9900|A990|1|
+|9900|C001|1|
+|9900|C010|1|
+|9900|C100|3|
+|9900|C170|3|
+|9900|C990|1|
+|9900|D001|1|
+|9900|D990|1|
+|9900|F001|1|
+|9900|F990|1|
+|9900|I001|1|
+|9900|I990|1|
+|9900|M001|1|
+|9900|M100|1|
+|9900|M105|1|
+|9900|M200|1|
+|9900|M400|1|
+|9900|M410|1|
+|9900|M500|1|
+|9900|M505|1|
+|9900|M600|1|
+|9900|M800|1|
+|9900|M810|1|
+|9900|M990|1|
+|9900|P001|1|
+|9900|P990|1|
+|9900|9900|44|
+|9990|47|
+|9999|96|
+SBRCAAEPDR0 	* H  
+   0 1
+0	+ 0 	* H  
+   $  0  (+m\f   ߜ 	 2Ԗ        0  q0 Y W"X 0
+	* H  
+
+ 0Y1
+0	UBR10U
+
+ICP-Brasil10U
+AC SOLUTI v510UAC CERTIFICA MINAS v50
+220510195500Z
+230510195500Z0  1
+0	UBR10U
+
+ICP-Brasil1
+0	UMG10U 
+Raul Soares10U
+AC CERTIFICA MINAS v510U
+0304903300011410U
+Videoconferencia10U
+Certificado PJ A11I0GU@SERGINHO COMERCIO E BENEFICIAMENTO DE CAFE - LTDA:463254800001610 "0
+	* H  
+   0 
+   Z ۇ| VP fw , X  r ꞈ   f  M    L) c7# \ sT   p RĶI"Q6 , 'E {  K+ΏY  2Ŗ9P  W  :P(  =  >   т  ~   ILs:/  (    y
+$Cw 6  h   C ,   G ϊ  T×      Gy ɨ   Ʀ;    ♇  =W ժ  3. j .n+ Ϝ   r
+ 1H`Y D, ^ =  y 'Ϻ=   V Z 	 , $      0  0U#0 ? \ M׈-  
+  O$ 0Y+ M0K0I+ 0 =http://ccd.acsoluti.com.br/lcr/ac-certificaminas-smime-v5.p7b0  U  0   )atendimento.oliveiraeassociados@gmail.com `L SERGIO MARCOS GOMES `L 46325480000161 8`L /-011019820561429960200000000000000000000000000 `L  0000000000000bU [0Y0W`L`0M0K+ ?http://ccd.acsoluti.com.br/docs/dpc-ac-certificaminas-smime.pdf0U%0+ + 0  U  0  0C A ? =http://ccd.acsoluti.com.br/lcr/ac-certificaminas-smime-v5.crl0D B @ >http://ccd2.acsoluti.com.br/lcr/ac-certificaminas-smime-v5.crl0U BdG w7 L v1    {  0U  0
+	* H  
+
+   GiU  m"T d-W BX  j{: ) { [ :x ~)   '  f  2 ֈ0 Y i  懶.c <    `  Z   ^l>  @    7@    15 9( D Yi   ! > ] 2  & Z  ˈ m= { 
+  h    ` ,, F @O  3Q  zAQD  O %o
+) ;g   Yh8 #1O Xv [ 䊘AS<  F prxZf   G  &  J  ,"M   P Ϸ
+i *#   ֱ3m      I 4
+!    θ 7!  W 
+4 Y] i ? W 4 ;Cs b  j
+@(D '+ pIx U 	 B      ̺)  7 m|  l  f E
+c  HӤ &zzx   Q g g o   όx    P   @J` < s  kH    E c 
+ RN         % ` >eC 
+ 0/D  U " > n[[* ]AsUu B,.  Ӌ X  tP  LP ^ V   7 mol`   h1#C(] EC  Ԡ9^ T S_}0  0   
+0
+	* H  
+
+ 0o1
+0	UBR10U
+
+ICP-Brasil1402U
++Autoridade Certificadora Raiz Brasileira v510UAC SOLUTI v50
+190205143643Z
+290302115859Z0Y1
+0	UBR10U
+
+ICP-Brasil10U
+AC SOLUTI v510UAC CERTIFICA MINAS v50 "0
+	* H  
+   0 
+   q   h" h PZc$?C u6 od霏 E%F3 6 GF  q`~w h;      c]޽ND  T  o@
+,    NR o :W -  ~    
+ .G   D7 Ef  G ~ O  ɦZ   9  s  <
+ q[1l4r r {/ >5  (  k   1Bb Q"\ch $- vq   (    Uٺ; _ '    j G j   t H% [    s  Ӊ  ۺ Z' W&	 
+O+ a>i   ::2   S 1 /Fe7zz)ީ t  GR  #ǎJi  9  n
+f   u0g  2 6D G~ 4 ;L  d     T   {  w  ֚   o    s        &1   Oע wA6    饝? y ^ w 
+
+( ^ p  J ř  u)
+ȓ -     ݒP  rs~̥1  8Y ť 	 	 L+ ZX u Ӡo X?.Hb2Q  	  . W B  }! >  # q   X%(_! 0 ~     0  0U? \ M׈-  
+  O$ 0U 0 0U#0 JǗܸY 
+ ;GU& ղ' zq0  U   0  0J`L-0@0>+ 2https://ccd.acsoluti.com.br/docs/dpc-ac-soluti.pdf0J`L`0@0>+ 2https://ccd.acsoluti.com.br/docs/dpc-ac-soluti.pdf0J`L[0@0>+ 2https://ccd.acsoluti.com.br/docs/dpc-ac-soluti.pdf0xUq0o05 3 1 /http://ccd.acsoluti.com.br/lcr/ac-soluti-v5.crl06 4 2 0http://ccd2.acsoluti.com.br/lcr/ac-soluti-v5.crl0U 0
+	* H  
+
+   b  a
+   ;b  v  Y D 9
+H   5@]t Ln   g3 5  O   t'Է  F    s  Ү    6 X    <ޟ B ";WN   Mg }I   % H2  A K q      s   
+ !V  2 u9B"< i    ji}||k! [;  x P n     2    _
+=  [<` 4   l  nY  >U?   TT # , R z) E P 1 O \ S J +  =:
+   	VZ  K %_"?Q   
+r s    ^    j  obL>   u   4   U0 ]ӑ cc
+ QOT  ap9n D  ~ $߅  Z* z  Ց ^ Tr:w jl3	M <Ԏ  :
+.1 c$$y #Bť 0qv 8 D^ B   s B   
+\  H h ej # `   QQD _ - eb @  } 3  -R   p0 ڢw=  fêEc	  ,E Jy   Vzqn    o g   2 'w5  j  8 |0  0   0
+	* H  
+
+ 0  1
+0	UBR10U
+
+ICP-Brasil1=0;U
+4Instituto Nacional de Tecnologia da Informacao - ITI1402U+Autoridade Certificadora Raiz Brasileira v50
+160302130138Z
+290302235938Z0  1
+0	UBR10U
+
+ICP-Brasil1=0;U
+4Instituto Nacional de Tecnologia da Informacao - ITI1402U+Autoridade Certificadora Raiz Brasileira v50 "0
+	* H  
+   0 
+   -xmE  _ `  e L  u^      $   XGA) h]  $3_ t  '  Nw `	v1    ,   %&(    a2Z  "   R   3\*C  gOc" f . k _ m 1    4 Lĺ  ߎasl Ô   \ 6 =Rk2^     ]
+   .W	 bF- B
+߃N  ko  6 b  X  o  j a:)   6i4 ( ;"nU  #  饙   I< D ߵLa   zshn  } 'ۚN hF*4     Sء- t  m  1    ` r M A5AI a
+z:| 7Ν  bö`X  S  
+   u  `. ~, i 1q1   Y ,L  2% / {    6I%N 6 B }   }  w `Y ߛ w  /( }   I }<>( w ~>Q  3K  ] '  a#Wʥ   F عH' j    u  i W>!2    m   Q h ` R:@  0{   {  ~ \   m  6     0  0NU G0E0C`L 0:08+ ,http://acraiz.icpbrasil.gov.br/DPCacraiz.pdf0?U80604 2 0 .http://acraiz.icpbrasil.gov.br/LCRacraizv5.crl0U#0 i  u   l E an h  @^0Ui  u   l E an h  @^0U 0 0U 0
+	* H  
+
+   m  bY ^ ? XQ  r S  ^g t Wi   ^` h Z D W/!! 
+9ԍ9"| s   E ÀI7?-  0   TX   ?Nf    aM   n t  
+ L R n K  	  d    !k0  fM A.t    rN &3y~  H-  ԉR ꣜   g$G1 c, ^ [9 R   >( ܕ  w az  t %. jY \: M    n  M\j ( _  )8v   \     } ThÑwEd. {F
+}x~ʙ H,    $ G l     Y.  N)D   
+ AC    G      .+a 8  Y  4 p       m  U ޯ2wK. Ǆm{! c,  F -L Gg k =N    b ;P  !   .@ ⍕ ]`B ; z V 㾭   >  (Ўh   q k o> &ӛj6 ;C (c z \a  	<  X;`}_|   5L    
+ n~MuE P W   Sq R 0 >0 & 
+0
+	* H  
+
+ 0  1
+0	UBR10U
+
+ICP-Brasil1=0;U
+4Instituto Nacional de Tecnologia da Informacao - ITI1402U+Autoridade Certificadora Raiz Brasileira v50
+180629185520Z
+290302120020Z0o1
+0	UBR10U
+
+ICP-Brasil1402U
++Autoridade Certificadora Raiz Brasileira v510UAC SOLUTI v50 "0
+	* H  
+   0 
+      e     "ɢ Շ : u W  	   1    р  R)  1 B7 x  ] 8_+ 
+' A  9 ;}    :ߌ b
+     L$W4  LH  EU ˙C    K   % O% X   	 Ye& N li    zu OB  H  Y   }. _    U   {  %c4    m[8  ӗ~[ޢ b v   b    \ v $   n    a e Bϰ  z M ˗/!uQOD_ Lk+m	 v5 
+ l X 
+Ɂ'o- $9#    _      kA S ku     N L     /|x4x t $  >i  &   r  I <Gu  Ѽ9r  }B  n9  H     q 2 jr; Y     e gB`(֯9(i W \a r3W   >  !Mn : 2  3: Oז 5 p E , x  ~)  = fyj
+ k V k n L iz? Y ޗ #  ۶   ^	 a>P X     0  0U 
+0
+0	`L.0 0?U80604 2 0 .http://acraiz.icpbrasil.gov.br/LCRacraizv5.crl0U#0 i  u   l E an h  @^0UJǗܸY 
+ ;GU& ղ' zq0U 0 0U 0
+	* H  
+
+   tǦ O rE6  o  ? E" ** J   (  {  H ) $" 5"   3AX :' 	   puj   L, s<8 
+b! 0{ JK    ) n  /  e1; v8 )    u    6DC@ ayVƿ  ޖ  { F W    Ƿ   qeNO'    _h Ȩ d) jھv  RE Yf01ͨ m o ߌ   P  {  =  Y 	 o$  qO3  SHVPg  UJl O     Ҫ|uؘ ?{k+  5=   \! &   j$
+ ?
+  ͣ ;$- I&,T >gtȴO thN   g A: 3 W 5712mcC  zN BCZ P }o   [     (#x#` <  X   aM >H ~
+ u-/N      X  ߧ Q   綉. 
+ V   l^i   ],q  ~  :  A%" w y  `n78 . f*8     ŕh   7   a cI   
+       1 0 0e0Y1
+0	UBR10U
+
+ICP-Brasil10U
+AC SOLUTI v510UAC CERTIFICA MINAS v5W"X 0	+    0	* H  
+	1
+	* H  
+ 0	* H  
+	1
+221006180033Z0#	* H  
+	1r ?&b :K   M ,'ӽ0.
++ 7X1 | 1 | 5 . 0 . 2 | 7 0 0 2 | 1 0
+	* H  
+     ;]alP  % H~   0ס;  >u vO 	  bkH	(*  [ SvC  B0'   Wf S g   vON p U % >FU  `
+ Kԡ ļ S m>&~ Y   R\[ ,ek,i-I-  
+        Z  2 
+  QO _BT
+ P   y( 㹀MF l<N  ,    jQZM  - F  < b    lbQ    uR v   I
+U]S  Կa   
+g{ 멃  ( Z~   
+9IE   # 2l4g   \      
