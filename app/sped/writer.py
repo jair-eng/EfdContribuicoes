@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict
+
+from app.sped.blocoC.c100_utils import recalcular_c990
 from app.sped.bloco_9.bloco9 import calcular_bloco9
 from app.sped.blocoM.blocoM import calcular_blocoM
 from app.sped.logic.consolidador import obter_conteudo_final
@@ -131,6 +133,9 @@ def gerar_sped(
     # 3.3) bloco P e 1 SEMPRE depois do M
     linhas_finais.extend(buckets.get("P", []))
     linhas_finais.extend(buckets.get("1", []))
+
+    # 3.3.1) recalcula fechamentos de blocos impactados
+    recalcular_c990(linhas_finais)
 
     # 3.4) bloco 9 SEMPRE no final (recalculado)
     bloco9 = calcular_bloco9(linhas_finais)

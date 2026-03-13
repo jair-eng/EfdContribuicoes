@@ -181,7 +181,7 @@ class RegraIndustrializacaoAgroV1(RegraBase):
                         val_item = self.dec_br(vl_item) or Decimal("0")
                         val_desc = self.dec_br(vl_desc) or Decimal("0")
                         val_icms = self.dec_br(vl_icms) or Decimal("0")
-                        val = val_item - val_desc - val_icms
+                        val = val_item - val_desc
                     else:
                         val = self.dec_br(vl_opr) or Decimal("0")
                 except Exception as e:

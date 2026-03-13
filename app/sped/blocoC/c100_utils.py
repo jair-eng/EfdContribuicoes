@@ -120,3 +120,23 @@ def patch_c100_totais_imposto(
 
     return novos
 
+def recalcular_c990(linhas: list[str]) -> list[str]:
+    """
+    Recalcula QTD_LIN_C do C990.
+    """
+
+    qtd = 0
+    idx_c990 = None
+
+    for i, l in enumerate(linhas):
+        if l.startswith("|C"):
+            qtd += 1
+
+        if l.startswith("|C990|"):
+            idx_c990 = i
+
+    if idx_c990 is not None:
+        linhas[idx_c990] = f"|C990|{qtd}|"
+
+    return linhas
+

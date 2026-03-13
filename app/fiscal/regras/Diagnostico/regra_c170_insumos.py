@@ -96,7 +96,7 @@ class RegraC170Insumos(RegraBase):
                 vl_desc = self.dec_br(it.get("vl_desc")) or Decimal("0")
                 vl_icms = self.dec_br(it.get("vl_icms")) or Decimal("0")
 
-                base_liquida = vl_item - vl_desc - vl_icms
+                base_liquida = vl_item - vl_desc
                 if base_liquida <= 0:
                     continue
 

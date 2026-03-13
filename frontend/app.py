@@ -346,6 +346,305 @@ elif page == "0 — Importar SPED":
             if st.button("➡️ Ir para Selecionar Versão"):
                 goto("2 — Selecionar Versão")
 
+    # ==========================================================
+    # ICMS/IPI — BASE AUXILIAR
+    # ==========================================================
+    st.divider()
+    st.subheader("Importar EFD ICMS/IPI")
+    st.caption(
+        "Importe os arquivos auxiliares de EFD ICMS/IPI para popular a base de cruzamento "
+        "(nf_icms_base / nf_icms_item). Essa base será usada no match com a EFD Contribuições."
+    )
+
+    ups_icms = st.file_uploader(
+        "Selecione um ou mais arquivos EFD ICMS/IPI (.txt)",
+        type=["txt"],
+        accept_multiple_files=True,
+        key="upload_icms_ipi_lote",
+    )
+
+    col_ic1, col_ic2 = st.columns([1, 1])
+
+    with col_ic1:
+        if st.button("Gerar preview ICMS/IPI", disabled=not ups_icms):
+            if not ups_icms:
+                st.warning("Envie ao menos um arquivo ICMS/IPI.")
+            else:
+                arquivos_ok = []
+                arquivos_err = []
+
+                with st.spinner("Gerando preview ICMS/IPI..."):
+                    try:
+                        files_payload = [
+                            ("arquivos", (f.name, f.getvalue(), "text/plain"))
+                            for f in ups_icms
+                        ]
+
+                        r = post(
+                            "/icms-ipi/preview",
+                            files=files_payload,
+                        )
+
+                        if r is None:
+                            st.session_state.icms_preview_response = None
+                            st.session_state.icms_preview_items = []
+                            st.session_state.icms_preview_errors = [
+                                {"arquivo": "LOTE", "erro": "Resposta vazia do backend."}
+                            ]
+                            st.warning("Não foi possível gerar o preview ICMS/IPI.")
+                        else:
+                            try:
+                                data = r.json()
+                            except Exception:
+                                data = {}
+
+                            if 200 <= r.status_code < 300:
+                                st.session_state.icms_preview_response = data
+                                st.session_state.icms_preview_items = data.get("arquivos", [])
+                                st.session_state.icms_preview_errors = []
+
+                                resumo = data.get("resumo", {})
+                                st.success(
+                                    "Preview ICMS/IPI concluído: "
+                                    f"{data.get('qtd_arquivos', 0)} arquivo(s), "
+                                    f"{resumo.get('total_notas', 0)} nota(s), "
+                                    f"{resumo.get('total_itens', 0)} item(ns)."
+                                )
+                            else:
+                                msg = (
+                                          data.get("detail")
+                                          if isinstance(data, dict)
+                                          else None
+                                      ) or f"Erro HTTP {r.status_code}"
+
+                                st.session_state.icms_preview_response = None
+                                st.session_state.icms_preview_items = []
+                                st.session_state.icms_preview_errors = [
+                                    {"arquivo": "LOTE", "erro": msg}
+                                ]
+                                st.warning("Não foi possível gerar o preview ICMS/IPI.")
+
+                    except Exception as e:
+                        st.session_state.icms_preview_response = None
+                        st.session_state.icms_preview_items = []
+                        st.session_state.icms_preview_errors = [
+                            {"arquivo": "LOTE", "erro": str(e)}
+                        ]
+                        st.warning("Erro ao gerar preview ICMS/IPI.")
+
+    with col_ic2:
+        st.info(
+            "Depois do preview, confirme a importação para popular a base auxiliar "
+            "utilizada no cruzamento com a EFD Contribuições."
+        )
+
+    preview_response = st.session_state.get("icms_preview_response") or {}
+    preview_items = st.session_state.get("icms_preview_items") or []
+    preview_errors = st.session_state.get("icms_preview_errors") or []
+
+    if preview_response:
+        empresa_nome = preview_response.get("empresa_nome")
+        empresa_id = preview_response.get("empresa_id")
+        cnpj = preview_response.get("cnpj")
+        periodos = preview_response.get("periodos") or []
+        resumo = preview_response.get("resumo") or {}
+
+        st.markdown("### ✅ Resumo do preview ICMS/IPI")
+        st.write(f"**Empresa:** {empresa_nome} (ID {empresa_id})")
+        st.write(f"**CNPJ:** {cnpj}")
+        st.write(f"**Períodos:** {', '.join(periodos) if periodos else '-'}")
+        st.write(
+            f"**Totais:** notas={resumo.get('total_notas', 0)} | "
+            f"itens={resumo.get('total_itens', 0)} | "
+            f"vl_doc={resumo.get('total_vl_doc', 0)} | "
+            f"vl_item={resumo.get('total_vl_item', 0)} | "
+            f"vl_icms={resumo.get('total_vl_icms', 0)}"
+        )
+
+    if preview_items:
+        st.markdown("### 📄 Arquivos ICMS/IPI no preview")
+
+        tabela_preview = []
+        for item in preview_items:
+            empresa_info = item.get("empresa")
+            empresa_nome_item = (
+                empresa_info.get("nome")
+                if isinstance(empresa_info, dict)
+                else empresa_info
+            )
+
+            tabela_preview.append({
+                "arquivo": item.get("arquivo"),
+                "periodo": item.get("periodo"),
+                "empresa": empresa_nome_item,
+                "total_notas": item.get("total_notas"),
+                "total_itens": item.get("total_itens"),
+                "total_vl_doc": item.get("total_vl_doc"),
+                "total_vl_item": item.get("total_vl_item"),
+                "total_vl_icms": item.get("total_vl_icms"),
+            })
+
+        st.table(tabela_preview)
+
+    if preview_errors:
+        st.markdown("### ❌ Erros no preview ICMS/IPI")
+        st.table(preview_errors)
+
+    col_ic3, col_ic4 = st.columns([1, 1])
+
+    with col_ic3:
+        sobrescrever_icms = st.checkbox(
+            "Sobrescrever notas já importadas",
+            value=True,
+            help="Recria os itens da nota na base auxiliar caso a nota já exista.",
+            key="sobrescrever_icms_checkbox",
+        )
+
+    with col_ic4:
+        st.success("Empresa identificada automaticamente pelo CNPJ do arquivo.")
+
+    if preview_items:
+        if st.button("✅ Confirmar importação ICMS/IPI"):
+            with st.spinner("Importando ICMS/IPI..."):
+                try:
+                    files_payload = [
+                        ("arquivos", (f.name, f.getvalue(), "text/plain"))
+                        for f in ups_icms
+                    ]
+
+                    r = post(
+                        "/icms-ipi/importar",
+                        files=files_payload,
+                        data={
+                            "sobrescrever_existentes": str(bool(sobrescrever_icms)).lower(),
+                        },
+                    )
+
+                    if r:
+                        data = r.json()
+                        st.session_state.icms_import_response = data
+                        st.session_state.icms_import_results = data.get("resultados", [])
+                        st.session_state.icms_import_errors = []
+
+                        resumo = data.get("resumo", {})
+                        st.success(
+                            "Importação ICMS/IPI concluída: "
+                            f"{data.get('qtd_arquivos', 0)} arquivo(s), "
+                            f"inseridas={resumo.get('inseridas', 0)}, "
+                            f"atualizadas={resumo.get('atualizadas', 0)}, "
+                            f"itens_inseridos={resumo.get('itens_inseridos', 0)}."
+                        )
+                    else:
+                        st.session_state.icms_import_response = None
+                        st.session_state.icms_import_results = []
+                        st.session_state.icms_import_errors = [
+                            {"arquivo": "LOTE", "erro": "Resposta vazia do backend."}
+                        ]
+                        st.warning("Não foi possível concluir a importação ICMS/IPI.")
+
+                except Exception as e:
+                    st.session_state.icms_import_response = None
+                    st.session_state.icms_import_results = []
+                    st.session_state.icms_import_errors = [
+                        {"arquivo": "LOTE", "erro": str(e)}
+                    ]
+                    st.warning("Erro ao importar ICMS/IPI.")
+
+    import_response = st.session_state.get("icms_import_response") or {}
+    import_results = st.session_state.get("icms_import_results") or []
+    import_errors = st.session_state.get("icms_import_errors") or []
+
+    if import_response:
+        empresa_nome = import_response.get("empresa_nome")
+        empresa_id = import_response.get("empresa_id")
+        cnpj = import_response.get("cnpj")
+        periodos = import_response.get("periodos") or []
+        resumo = import_response.get("resumo") or {}
+
+        st.markdown("### 📦 Resumo da importação ICMS/IPI")
+        st.write(f"**Empresa:** {empresa_nome} (ID {empresa_id})")
+        st.write(f"**CNPJ:** {cnpj}")
+        st.write(f"**Períodos:** {', '.join(periodos) if periodos else '-'}")
+        st.write(
+            f"**Totais:** lido_notas={resumo.get('total_lido_notas', 0)} | "
+            f"lido_itens={resumo.get('total_lido_itens', 0)} | "
+            f"inseridas={resumo.get('inseridas', 0)} | "
+            f"atualizadas={resumo.get('atualizadas', 0)} | "
+            f"ignoradas={resumo.get('ignoradas', 0)} | "
+            f"itens_inseridos={resumo.get('itens_inseridos', 0)} | "
+            f"itens_removidos={resumo.get('itens_removidos', 0)}"
+        )
+
+    if import_results:
+        st.markdown("### 📄 Resultado por arquivo da importação ICMS/IPI")
+
+        tabela_import = []
+        for item in import_results:
+            tabela_import.append({
+                "arquivo": item.get("arquivo"),
+                "periodo": item.get("periodo"),
+                "total_lido_notas": item.get("total_lido_notas"),
+                "total_lido_itens": item.get("total_lido_itens"),
+                "inseridas": item.get("inseridas"),
+                "atualizadas": item.get("atualizadas"),
+                "ignoradas": item.get("ignoradas"),
+                "itens_inseridos": item.get("itens_inseridos"),
+                "itens_removidos": item.get("itens_removidos"),
+                "total_importado_empresa_periodo": item.get("total_importado_empresa_periodo"),
+                "total_itens_importados_empresa_periodo": item.get("total_itens_importados_empresa_periodo"),
+            })
+
+        st.table(tabela_import)
+
+    if import_errors:
+        st.markdown("### ⚠️ Erros na importação ICMS/IPI")
+        st.table(import_errors)
+
+    # ==========================================================
+    # FOTO RECUPERAÇÃO
+    # ==========================================================
+    st.divider()
+    st.subheader("Foto Recuperação")
+    st.caption(
+        "Executa o cruzamento ICMS/IPI x EFD Contribuições a partir das pastas configuradas "
+        "no backend e gera a planilha consolidada da Foto Recuperação."
+    )
+
+    st.info(
+        "Este processo lê os arquivos das pastas ICMS/IPI e EFD Contribuições no backend, "
+        "cruza os dados e devolve o XLSX final para download."
+    )
+
+    if st.button("📸 Gerar Foto Recuperação"):
+        try:
+            with st.spinner("Gerando Foto Recuperação..."):
+                url = api_url("/foto-recuperacao/executar")
+                resp = requests.post(url, timeout=TIMEOUT)
+
+                if resp.status_code >= 400:
+                    try:
+                        err = resp.json()
+                        detail = err.get("detail") or f"HTTP {resp.status_code}"
+                    except Exception:
+                        detail = f"HTTP {resp.status_code}"
+                    st.error(f"Erro ao gerar Foto Recuperação: {detail}")
+                else:
+                    st.session_state.foto_xlsx_bytes = resp.content
+                    st.success("Foto Recuperação gerada com sucesso.")
+
+        except Exception as e:
+            st.error(f"Erro ao gerar Foto Recuperação: {e}")
+
+    foto_xlsx_bytes = st.session_state.get("foto_xlsx_bytes")
+
+    if foto_xlsx_bytes:
+        st.download_button(
+            label="⬇️ Baixar Excel Foto Recuperação",
+            data=foto_xlsx_bytes,
+            file_name="foto_recuperacao_cruzada.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_foto_recuperacao_xlsx",
+        )
 
 
 # ===========================

@@ -1,12 +1,13 @@
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
 from app.db.models.efd_versao import EfdVersao
-from app.db.models.ref_models import RefCstPisCofins, RefCfop
+from typing import Any, Iterable, Optional
+from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes_e_insert
 from app.sped.blocoC.c170_utils import _parse_linha_sped_to_reg_dados, _parse_sped_float
 from typing import Any, Dict, Optional, List, Tuple
 from sqlalchemy.orm import Session
 import os
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from app.sped.revisao_overlay import LinhaLogica
 from sqlalchemy import func,or_
 import re
@@ -30,6 +31,12 @@ def _to_decimal(self, s):
         return Decimal(txt)
     except:
         return None
+
+def _q2(v: Decimal) -> Decimal:
+    return (v or Decimal("0")).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+def _s(v: Any) -> str:
+    return str(v or "").strip()
 
 def norm(x: Optional[str]) -> Optional[str]:
     if x is None:
@@ -87,6 +94,71 @@ def calcular_totais_filhos(db: Session, versao_id: int, c100_id: int):
             t_cofins += _parse_sped_float(dados[34])
 
     return t_pis, t_cofins
+
+def calcular_totais_filhos_overlay(
+    db,
+    *,
+    versao_origem_id: int,
+    versao_final_id: int | None,
+    c100_id: int,
+) -> Tuple[Decimal, Decimal]:
+    """
+    Soma VL_PIS e VL_COFINS dos C170 filhos de um C100 considerando overlay
+    (REPLACE_LINE + INSERT_AFTER/BEFORE).
+    """
+    linhas = carregar_linhas_logicas_com_revisoes_e_insert(
+        db=db,
+        versao_origem_id=int(versao_origem_id),
+        versao_final_id=versao_final_id,
+    )
+
+    total_pis = Decimal("0.00")
+    total_cofins = Decimal("0.00")
+
+    for ln in linhas:
+        if str(getattr(ln, "reg", "")).upper() != "C170":
+            continue
+
+        pai_id = int(getattr(ln, "pai_id", 0) or 0)
+        if pai_id != int(c100_id):
+            continue
+
+        conteudo = obter_conteudo_final(ln) or ""
+        if not conteudo.startswith("|C170|"):
+            continue
+
+        try:
+            reg, dados = _parse_linha_sped_to_reg_dados(conteudo)
+        except Exception:
+            continue
+
+        if reg != "C170":
+            continue
+
+        # índices do C170 sem o REG
+        # 29 -> VL_PIS
+        # 35 -> VL_COFINS
+        vl_pis = Decimal("0.00")
+        vl_cofins = Decimal("0.00")
+
+        try:
+            if len(dados) > 28:
+                raw = str(dados[28] or "").strip().replace(".", "").replace(",", ".")
+                vl_pis = Decimal(raw or "0")
+        except Exception:
+            vl_pis = Decimal("0.00")
+
+        try:
+            if len(dados) > 34:
+                raw = str(dados[34] or "").strip().replace(".", "").replace(",", ".")
+                vl_cofins = Decimal(raw or "0")
+        except Exception:
+            vl_cofins = Decimal("0.00")
+
+        total_pis += vl_pis
+        total_cofins += vl_cofins
+
+    return _q2(total_pis), _q2(total_cofins)
 
 def buscar_pai_c100(db: Session, versao_id: int, linha_item: int) -> EfdRegistro:
     """
@@ -466,3 +538,18 @@ def eh_pf_por_c100(db: Session, versao_id: int, registro_id: int) -> bool:
     pfdbg(f"[PF] RESULTADO is_pf={bool(len(cpf_0150) == 11 and not cnpj_0150)}")
 
     return False
+
+
+
+def _eh_item_cafe_match(item: Dict[str, Any]) -> bool:
+    ncm = _s(item.get("ncm"))
+    descricao = _s(item.get("descricao")).upper()
+    cod_item = _s(item.get("cod_item")).upper()
+
+    if ncm.startswith("0901"):
+        return True
+
+    texto = f"{descricao} {cod_item}"
+    return "CAFE" in texto or "CAFÉ" in texto
+
+

@@ -12,6 +12,7 @@ from app.db.models.efd_versao import EfdVersao
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_apontamento import EfdApontamento
 from app.db.models.efd_revisao import EfdRevisao
+from app.db.models.nf_icms_item import NfIcmsItem
 
 __all__ = [
     "Empresa",
@@ -21,6 +22,9 @@ __all__ = [
     "EfdApontamento",
     "EfdRevisao",
     "NfIcmsBase",
+    "NfIcmsItem",
 ]
+
+
 
 

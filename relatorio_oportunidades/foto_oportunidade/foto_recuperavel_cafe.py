@@ -690,7 +690,7 @@ def foto_recuperavel_ind_torrado(
                 vl_bc_pis = dec_br(fields[24]) if len(fields) > 24 else Decimal("0")
                 vl_bc_cof = dec_br(fields[30]) if len(fields) > 30 else Decimal("0")
 
-                base_item_liquida = vl_item - vl_desc - vl_icms
+                base_item_liquida = vl_item - vl_desc
                 if base_item_liquida < 0:
                     base_item_liquida = Decimal("0")
 

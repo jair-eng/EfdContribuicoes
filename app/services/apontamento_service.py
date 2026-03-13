@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 from app.db.models import EfdApontamento, EfdVersao, EfdArquivo
 from typing import List
-
 from app.fiscal.regras.Autocorrigivel.agro import aplicar_correcao_ind_agro_cst51
 from app.fiscal.regras.Autocorrigivel.cafe import aplicar_correcao_ind_cafe_cst51
 from app.fiscal.regras.Autocorrigivel.supermercado import aplicar_correcao_sup_limpeza_cst51_hibrido, \

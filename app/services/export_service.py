@@ -18,10 +18,12 @@ from app.sped.bloco_1.builder import (
      montar_bloco_1_1100_1500_cumulativo, extrair_creditos_mes_bloco_m
 )
 from app.db.models import EfdVersao, EfdArquivo, EfdRegistro
-from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
+from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes, \
+    carregar_linhas_logicas_com_revisoes_e_insert
 from app.sped.blocoM.m_utils import caminho_sped_corrigido, nome_sped_corrigido, _cst_norm, sanitizar_bloco_m, \
     carregar_ajustes_m
 from app.sped.parser import parse_sped_from_lines
+from app.sped.utils_hierarquia import resolver_ind_oper_c100_com_fallback
 from app.sped.writer import gerar_sped
 import app.sped.writer as writer_module
 from app.sped.layouts.c170 import LAYOUT_C170
@@ -59,7 +61,7 @@ def exportar_sped(
     print(f"EXPORT> versao_id={versao_id} | Origem={versao_origem_id} | Final={versao_final_id}")
 
     # 1) carrega linhas com overlay aplicado
-    linhas = carregar_linhas_logicas_com_revisoes(
+    linhas = carregar_linhas_logicas_com_revisoes_e_insert(
         db=db,
         versao_origem_id=versao_origem_id,
         versao_final_id=versao_final_id,
@@ -157,7 +159,7 @@ def exportar_sped(
             vl_icms = dec_br(dados[LAYOUT_C170.idx_vl_icms]) if len(dados) > LAYOUT_C170.idx_vl_icms else Decimal(
                 "0.00")
 
-            base_liquida = vl_item - vl_desc - vl_icms
+            base_liquida = vl_item - vl_desc
             if base_liquida <= 0:
                 continue
 
@@ -178,7 +180,12 @@ def exportar_sped(
                 continue
 
             # 2) Só ENTRADAS (IND_OPER do C100 pai == "0")
-            ind_oper = ""
+            ind_oper = resolver_ind_oper_c100_com_fallback(
+                db=db,
+                linha=ln,
+                rid=rid_int,
+                linhas=linhas,
+            )
             if rid_int:
                 ind_oper = _ind_oper_pai_c100(rid_int)
 

@@ -173,6 +173,43 @@ def _parse_linha_sped_to_reg_dados(linha: str) -> Tuple[str, List[Any]]:
     dados = parts[1:]
     return reg, dados
 
+from typing import Any, List, Tuple
+
+
+def _parse_linha_sped_to_reg_dados_preservando_finais_vazios(linha: str) -> Tuple[str, List[Any]]:
+    s = (linha or "").strip()
+    if not s:
+        raise ValueError("Linha SPED vazia")
+
+    s = s.lstrip("\ufeff")
+
+    anchor = "|C170|"
+    p = s.find(anchor)
+    if p >= 0:
+        s = s[p:]
+
+    if not s.startswith("|"):
+        p2 = s.find("|")
+        if p2 >= 0:
+            s = s[p2:]
+
+    s = s.strip()
+    if not (s.startswith("|") and "|" in s[1:]):
+        raise ValueError(f"Linha SPED inválida: {s[:80]}")
+
+    # remove só o primeiro pipe; preserva vazios do final
+    corpo = s[1:]
+
+    # se terminar com pipe, remove apenas UM pipe estrutural final
+    # e preserva os pipes extras que representam campos vazios reais
+    if corpo.endswith("|"):
+        corpo = corpo[:-1]
+
+    parts = corpo.split("|")
+    reg = parts[0].strip().upper()
+    dados = parts[1:]
+    return reg, dados
+
 
 @dataclass
 class RegistroLike:

@@ -261,9 +261,9 @@ def revisar_c170_lote(
         f"Ignorados (COD_SIT)={total_ignorado_sit} | "
         f"Ignorados (CPF)={total_ignorado_pf} | Erros={total_erros}"
     )
-    print("LOTE> c100_afetados=", len(c100_afetados), "ex=", list(c100_afetados)[:5])
 
     # --- CONSOLIDAÇÃO C100 ---
+
     for c100_id in c100_afetados:
         try:
             total_pis, total_cofins = calcular_totais_filhos(db, versao_origem_id, c100_id)
@@ -274,6 +274,7 @@ def revisar_c170_lote(
 
             dados_c100 = _get_dados(reg_c100)
             campos_atualizados = patch_c100_totais_imposto(dados_c100, total_pis, total_cofins)
+
 
             salvar_revisao_c100_automatica(
                 db,

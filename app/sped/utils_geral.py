@@ -546,3 +546,6 @@ def versao_tem_apontamento_codigo_ctx(
     )
     print("[CTX] versao_id=", versao_id, "codigos=", list(codigos), "=>", ok)
     return ok
+
+
+

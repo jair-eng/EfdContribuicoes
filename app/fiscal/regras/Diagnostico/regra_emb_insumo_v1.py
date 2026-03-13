@@ -135,7 +135,7 @@ class RegraEmbalagemInsumoV1(RegraBase):
                 vl_desc = self.dec_br(it.get("vl_desc")) or Decimal("0")
                 vl_icms = self.dec_br(it.get("vl_icms")) or Decimal("0")
 
-                val = vl_item - vl_desc - vl_icms
+                val = vl_item - vl_desc
                 if val <= 0:
                     continue
 
