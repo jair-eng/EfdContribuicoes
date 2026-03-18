@@ -144,6 +144,7 @@ def gerar_sped(
         if l9c:
             linhas_finais.append(l9c)
 
+
     # 4) Escreve
     with open(destino_arquivo, "w", encoding="iso-8859-1", errors="replace", newline="") as f:
         for linha in linhas_finais:

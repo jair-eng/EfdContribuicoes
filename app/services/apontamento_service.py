@@ -33,6 +33,7 @@ class ApontamentoService:
             )
             if x and x[0]
         ]
+
         print("[RESOLVER_TODOS] versao_id=", versao_id, "codigos_pendentes=", codigos_pendentes)
 
         # 1) AUTO-FIX — CAFÉ (prioridade) + AGRO (quando você quiser habilitar)

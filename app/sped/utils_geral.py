@@ -65,6 +65,9 @@ def get_registro_id(r) -> int:
 
     return 0
 
+def _somente_digitos(txt: str | None) -> str:
+    return "".join(ch for ch in str(txt or "") if ch.isdigit())
+
 def _safe_json(obj):
     if isinstance(obj, dict):
         return {k: _safe_json(v) for k, v in obj.items()}

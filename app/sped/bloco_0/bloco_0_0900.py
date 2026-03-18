@@ -164,3 +164,35 @@ def aplicar_0900_se_necessario(
             print("[0900] FINAL:", ln)
 
     return out
+
+
+def recalcular_0990_bloco0(linhas_sped: List[str]) -> List[str]:
+    out = []
+    bloco0 = []
+    em_bloco0 = False
+    fechou = False
+
+    for ln in linhas_sped:
+        if ln.startswith("|0000|"):
+            em_bloco0 = True
+
+        if em_bloco0 and not fechou:
+            if ln.startswith("|0990|"):
+                qtd0 = len(bloco0) + 1
+                bloco0.append(f"|0990|{qtd0}|")
+                out.extend(bloco0)
+                fechou = True
+                em_bloco0 = False
+                continue
+
+            bloco0.append(ln)
+            continue
+
+        out.append(ln)
+
+    if bloco0 and not fechou:
+        qtd0 = len(bloco0) + 1
+        bloco0.append(f"|0990|{qtd0}|")
+        out = bloco0 + out
+
+    return out

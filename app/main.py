@@ -12,20 +12,39 @@ from app.db.models.base import Base
 from app.db.session import engine
 from app.api.empresa_endpoints import router as empresa_router
 from app.api.routes.revision_endpoints import router as revision_router
-import app.db.models.models_all # noqa  ✅ garante que todos os models foram carregados
+import app.db.models.models_all #  ✅ garante que todos os models foram carregados
 from app.api.routes.c170_endpoints import router as c170_router
 from app.api.routes.icms_ipi_endpoints import router as icms_ipi_router
 from app.api.routes.foto_recuperacao_endpoints import router as foto_recuperacao_router
 from app.api.routes.dossie import router as dossie_router
 import logging
 import sys
+from pathlib import Path
+import os
+from logging.handlers import RotatingFileHandler
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+DEBUG_MODE = os.getenv("APP_DEBUG", "0") == "1"
 
 logging.basicConfig(
-    level=logging.INFO,  # mude para DEBUG se quiser
+    level=logging.DEBUG if DEBUG_MODE else logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        RotatingFileHandler(
+            LOG_DIR / "sped_creditos.log",
+            maxBytes=5_000_000,
+            backupCount=3,
+            encoding="utf-8",
+        ),
+    ],
 )
+
 logger = logging.getLogger(__name__)
+
+logger.info("Sistema SPED Créditos iniciado | debug=%s", DEBUG_MODE)
 
 
 APP_TITLE = "SPED Créditos"

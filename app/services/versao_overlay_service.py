@@ -5,6 +5,10 @@ from app.sped.revisao_overlay import LinhaLogica, aplicar_revisoes_replace_line
 from sqlalchemy.orm import Session
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models.efd_revisao import EfdRevisao
+import logging
+
+log = logging.getLogger(__name__)
+
 
 
 def carregar_linhas_logicas_com_revisoes(
@@ -13,9 +17,12 @@ def carregar_linhas_logicas_com_revisoes(
     versao_origem_id: int,
     versao_final_id: int | None = None,
 ) -> list[LinhaLogica]:
-    print("LOADER EXECUTANDO", "origem=", versao_origem_id, "final=", versao_final_id, flush=True)
+    log.info(
+        "LOADER revisoes | origem=%s final=%s",
+        versao_origem_id,
+        versao_final_id,
+    )
 
-    # 1) Base: registros da versão origem
     regs = (
         db.query(EfdRegistro)
         .filter(EfdRegistro.versao_id == int(versao_origem_id))
@@ -26,30 +33,25 @@ def carregar_linhas_logicas_com_revisoes(
     rid_to_pai: dict[int, int] = {int(r.id): int(getattr(r, "pai_id", 0) or 0) for r in regs}
     rid_to_reg: dict[int, str] = {int(r.id): str(getattr(r, "reg", "") or "").strip() for r in regs}
 
-    linhas_originais: list[LinhaLogica] = [
-        LinhaLogica.from_efd_registro(r) for r in regs
-    ]
+    linhas_originais: list[LinhaLogica] = [LinhaLogica.from_efd_registro(r) for r in regs]
 
     if not linhas_originais:
+        log.debug("LOADER revisoes sem linhas base | origem=%s", versao_origem_id)
         return []
 
-    # 2) Busca revisões
     q = (
         db.query(EfdRevisao)
         .filter(EfdRevisao.acao.in_(["REPLACE_LINE", "DELETE"]))
     )
 
     if versao_final_id is not None:
-        # export de versão revisada (ex: 63)
         q = q.filter(EfdRevisao.versao_revisada_id == int(versao_final_id))
     else:
-        # tela de revisão (pendentes)
         q = q.filter(EfdRevisao.versao_origem_id == int(versao_origem_id))
         q = q.filter(EfdRevisao.versao_revisada_id.is_(None))
 
     revisoes_db = q.order_by(EfdRevisao.created_at.asc(), EfdRevisao.id.asc()).all()
 
-    # 3) Monta revisoes_dict (COM linha_referencia)
     revisoes_dict: list[dict] = []
 
     for rv in revisoes_db:
@@ -78,45 +80,56 @@ def carregar_linhas_logicas_com_revisoes(
                 "registro_id": rid,
                 "linha_num": linha_ref,
                 "acao": "REPLACE_LINE",
-                "linha": linha_txt,  # ✅ sempre linha_nova
+                "linha": linha_txt,
                 "revisao_json": j,
             })
-            continue
 
-    # 4) 🔥 APLICA OVERLAY
     linhas_finais = aplicar_revisoes_replace_line(
         linhas_originais=linhas_originais,
         revisoes=revisoes_dict,
         preferir_ultima=True,
     )
 
-    # 🔎 DEBUG TEMPORÁRIO — É AQUI
     alteradas = [l for l in linhas_finais if l.origem == "REVISAO"]
-    print("LOADER> linhas:", len(linhas_finais))
-    print("LOADER> revisoes carregadas:", len(revisoes_dict))
-    print("LOADER> linhas alteradas:", len(alteradas))
+
+    log.debug(
+        "LOADER revisoes stats | origem=%s final=%s linhas=%s revisoes=%s alteradas=%s",
+        versao_origem_id,
+        versao_final_id,
+        len(linhas_finais),
+        len(revisoes_dict),
+        len(alteradas),
+    )
 
     if alteradas:
         ex = alteradas[0]
-        print("LOADER> EXEMPLO:", "registro_id=", ex.registro_id, "linha=", ex.linha, "reg=", ex.reg, "origem=",
-              ex.origem)
+        log.debug(
+            "LOADER revisoes exemplo | registro_id=%s linha=%s reg=%s origem=%s revisao_id=%s",
+            ex.registro_id,
+            ex.linha,
+            ex.reg,
+            ex.origem,
+            getattr(ex, "revisao_id", None),
+        )
 
         if str(ex.reg).upper() == "C170":
-            print(
-                "LOADER> EXEMPLO CST:",
-                "cst_pis=", ex.dados[23] if len(ex.dados) > 23 else None,
-                "cst_cof=", ex.dados[29] if len(ex.dados) > 29 else None,
+            log.debug(
+                "LOADER revisoes exemplo C170 | cst_pis=%s cst_cof=%s",
+                ex.dados[23] if len(ex.dados) > 23 else None,
+                ex.dados[29] if len(ex.dados) > 29 else None,
             )
 
     rid_debug = 1025
     x = next((l for l in linhas_finais if int(getattr(l, "registro_id", 0) or 0) == rid_debug), None)
     if x:
-        print("LOADER> DEBUG rid=1025", "reg=", x.reg, "origem=", x.origem, "revisao_id=",
-              getattr(x, "revisao_id", None))
-    else:
-        print("LOADER> DEBUG rid=1025 nao encontrado (normal se o id não existir nessa origem)")
+        log.debug(
+            "LOADER revisoes rid_debug | rid=%s reg=%s origem=%s revisao_id=%s",
+            rid_debug,
+            x.reg,
+            x.origem,
+            getattr(x, "revisao_id", None),
+        )
 
-    # ✅ Enriquecer linhas com pai_id do DB (mantém hierarquia no overlay)
     for l in linhas_finais:
         try:
             rid = int(getattr(l, "registro_id", 0) or 0)
@@ -125,13 +138,11 @@ def carregar_linhas_logicas_com_revisoes(
                 if pai > 0:
                     setattr(l, "pai_id", pai)
 
-                # opcional: garantir reg coerente, se precisar
                 if not getattr(l, "reg", None):
                     setattr(l, "reg", rid_to_reg.get(rid, ""))
         except Exception:
             pass
 
-    # 5) RETURN FINAL
     return linhas_finais
 
 
@@ -141,8 +152,11 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
     versao_origem_id: int,
     versao_final_id: int | None = None,
 ) -> list[LinhaLogica]:
-    print("LOADER+INSERT EXECUTANDO", "origem=", versao_origem_id, "final=", versao_final_id, flush=True)
-    print("########## DEBUG NOVO LOADER ##########", flush=True)
+    log.info(
+        "LOADER revisoes+insert | origem=%s final=%s",
+        versao_origem_id,
+        versao_final_id,
+    )
 
     regs = (
         db.query(EfdRegistro)
@@ -157,6 +171,7 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
     linhas_originais: list[LinhaLogica] = [LinhaLogica.from_efd_registro(r) for r in regs]
 
     if not linhas_originais:
+        log.debug("LOADER revisoes+insert sem linhas base | origem=%s", versao_origem_id)
         return []
 
     q = db.query(EfdRevisao).filter(
@@ -170,7 +185,6 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
         q = q.filter(EfdRevisao.versao_revisada_id.is_(None))
 
     revisoes_db = q.order_by(EfdRevisao.created_at.asc(), EfdRevisao.id.asc()).all()
-
 
     revisoes_dict: list[dict] = []
 
@@ -207,7 +221,6 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
 
         if acao in {"INSERT_AFTER", "INSERT_BEFORE"}:
             linha_txt = str((j.get("linha_nova") or "")).strip()
-
             if not linha_txt:
                 continue
             revisoes_dict.append({
@@ -218,16 +231,13 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
                 "linha": linha_txt,
                 "revisao_json": j,
             })
-            continue
 
-    # primeiro replace/delete
     linhas_base = aplicar_revisoes_replace_line(
         linhas_originais=linhas_originais,
         revisoes=revisoes_dict,
         preferir_ultima=True,
     )
 
-    # reidrata pai_id dos originais ANTES do insert
     for l in linhas_base:
         try:
             rid = int(getattr(l, "registro_id", 0) or 0)
@@ -241,14 +251,12 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
         except Exception:
             pass
 
-    # depois insert
     linhas_finais = aplicar_revisoes_insert(
         linhas_base=linhas_base,
         revisoes=revisoes_dict,
         preferir_ultima=True,
     )
 
-    # reidrata/normaliza pai_id dos INSERIDOS até chegar no C100
     rev_por_id = {int(r["id"]): r for r in revisoes_dict if int(r.get("id") or 0) > 0}
 
     for l in linhas_finais:
@@ -260,7 +268,6 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
 
             pai_atual = int(getattr(l, "pai_id", 0) or 0)
 
-            # se já aponta para C100, ok
             if pai_atual > 0:
                 reg_pai_atual = str(rid_to_reg.get(pai_atual, "") or "").strip().upper()
                 if reg_pai_atual == "C100":
@@ -275,10 +282,8 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
             if alvo_rid <= 0:
                 continue
 
-            # começa do pai atual, se houver; senão, do alvo da revisão
             cursor = pai_atual if pai_atual > 0 else alvo_rid
 
-            # sobe a hierarquia até encontrar C100
             while cursor > 0:
                 reg_cursor = str(rid_to_reg.get(cursor, "") or "").strip().upper()
                 if reg_cursor == "C100":
@@ -286,16 +291,29 @@ def carregar_linhas_logicas_com_revisoes_e_insert(
                     break
                 cursor = int(rid_to_pai.get(cursor, 0) or 0)
 
-            print(
-                "[DBG INSERIDO FINAL]",
-                "linha=", l.linha,
-                "revisao_id=", revisao_id,
-                "pai_id=", getattr(l, "pai_id", None),
-                "reg=", l.reg,
-                "dados0=", (l.dados[:5] if getattr(l, "dados", None) else []),
-                flush=True,
+            log.debug(
+                "LOADER inserido final | linha=%s revisao_id=%s pai_id=%s reg=%s dados0=%s",
+                l.linha,
+                revisao_id,
+                getattr(l, "pai_id", None),
+                l.reg,
+                (l.dados[:5] if getattr(l, "dados", None) else []),
             )
         except Exception as e:
-            print("[DBG INSERIDO FINAL ERRO]", repr(e), flush=True)
+            log.warning("LOADER inserido final erro | erro=%r", e)
+
+    qtd_insert = len([r for r in revisoes_dict if r.get("acao") in {"INSERT_AFTER", "INSERT_BEFORE"}])
+    qtd_replace_delete = len([r for r in revisoes_dict if r.get("acao") in {"REPLACE_LINE", "DELETE"}])
+
+    log.debug(
+        "LOADER revisoes+insert stats | origem=%s final=%s base=%s final_linhas=%s revisoes=%s replace_delete=%s inserts=%s",
+        versao_origem_id,
+        versao_final_id,
+        len(linhas_base),
+        len(linhas_finais),
+        len(revisoes_dict),
+        qtd_replace_delete,
+        qtd_insert,
+    )
 
     return linhas_finais

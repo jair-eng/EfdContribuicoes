@@ -142,6 +142,21 @@ def importar_sped_icms(
                 base_row.serie = getattr(nota, "serie", None)
                 base_row.vl_doc = nota.vl_doc
                 base_row.vl_icms = nota.vl_icms
+
+                base_row.cod_part = getattr(nota, "cod_part", None)
+
+                base_row.participante_nome = getattr(nota, "participante_nome", None)
+                base_row.participante_cod_pais = getattr(nota, "participante_cod_pais", None)
+                base_row.participante_cnpj = getattr(nota, "participante_cnpj", None)
+                base_row.participante_cpf = getattr(nota, "participante_cpf", None)
+                base_row.participante_ie = getattr(nota, "participante_ie", None)
+                base_row.participante_cod_mun = getattr(nota, "participante_cod_mun", None)
+                base_row.participante_suframa = getattr(nota, "participante_suframa", None)
+                base_row.participante_end = getattr(nota, "participante_end", None)
+                base_row.participante_num = getattr(nota, "participante_num", None)
+                base_row.participante_compl = getattr(nota, "participante_compl", None)
+                base_row.participante_bairro = getattr(nota, "participante_bairro", None)
+
                 base_row.fonte = nota.fonte
                 base_row.nome_arquivo = nome_arquivo
 
@@ -165,6 +180,21 @@ def importar_sped_icms(
                 serie=getattr(nota, "serie", None),
                 vl_doc=nota.vl_doc,
                 vl_icms=nota.vl_icms,
+
+                cod_part=getattr(nota, "cod_part", None),
+
+                participante_nome=getattr(nota, "participante_nome", None),
+                participante_cod_pais=getattr(nota, "participante_cod_pais", None),
+                participante_cnpj=getattr(nota, "participante_cnpj", None),
+                participante_cpf=getattr(nota, "participante_cpf", None),
+                participante_ie=getattr(nota, "participante_ie", None),
+                participante_cod_mun=getattr(nota, "participante_cod_mun", None),
+                participante_suframa=getattr(nota, "participante_suframa", None),
+                participante_end=getattr(nota, "participante_end", None),
+                participante_num=getattr(nota, "participante_num", None),
+                participante_compl=getattr(nota, "participante_compl", None),
+                participante_bairro=getattr(nota, "participante_bairro", None),
+
                 fonte=nota.fonte,
                 nome_arquivo=nome_arquivo,
             )

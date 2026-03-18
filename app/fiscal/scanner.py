@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from decimal import Decimal , InvalidOperation
-from typing import Any, Dict, List, Optional, Tuple, Union
+from decimal import Decimal
+from typing import Any, Dict, List,Tuple
 from sqlalchemy.orm import Session
 from app.db.models import EfdRegistro, EfdApontamento
 from app.fiscal.constants import DOM_SUP, DOM_GERAL, DOMINIOS_VALIDOS
@@ -13,9 +13,10 @@ from app.db.models.efd_arquivo import EfdArquivo
 from app.fiscal.scanners.c100_entrada import montar_c100_entrada_relevante_agg
 from app.fiscal.ent_cat_fiscal import carregar_catalogo_fiscal
 from app.fiscal.scanners.exportacao import montar_c190_export_agg, montar_c170_export_agg, montar_c190_ind_torrado_agg, \
-    montar_c170_ind_torrado_agg, montar_c170_insumo_agg, montar_c170_sup_entrada_agg, montar_c170_saida_agg
+    montar_c170_ind_torrado_agg, montar_c170_insumo_agg, montar_c170_saida_agg
 from app.fiscal.scanners.scanner_helpers import key_apontamento, norm_codigo, norm_prioridade, prioridade_por_impacto, \
     safe_float
+from app.fiscal.scanners.util_scan import aplicar_contexto
 from app.fiscal.varredura import executar_varredura
 from app.fiscal.regras.Diagnostico.achado import Achado
 from app.fiscal.scanners.exportacao import montar_meta_fiscal
@@ -49,7 +50,25 @@ class FiscalScanner:
         - Executa motor fiscal
         - Persiste apontamentos preservando resolvidos (merge por chave lógica)
         """
-        print("[SCAN] db_id=", id(db), "versao_id=", versao_id)
+        logger.info(
+            "SCAN iniciado | versao_id=%s | empresa_id=%s | aplicar_revisoes=%s",
+            versao_id,
+            empresa_id,
+            aplicar_revisoes,
+        )
+
+        scan_report: Dict[str, Any] = {
+            "versao_id": int(versao_id),
+            "empresa_id": int(empresa_id) if empresa_id else None,
+            "rows_base": 0,
+            "rows_agg": 0,
+            "rows_limpas": 0,
+            "dtos_total": 0,
+            "dtos_c170": 0,
+            "pf_bloqueados": 0,
+            "c100_sit_skip": 0,
+            "agregadores_criados": [],
+        }
 
         # -----------------------------
         # 0) Normalizações e contexto
@@ -79,6 +98,7 @@ class FiscalScanner:
             .order_by(EfdRegistro.linha.asc())
             .all()
         )
+        scan_report["rows_base"] = len(rows)
 
         rid_to_pai_id = {int(r.id): int(getattr(r, "pai_id", 0) or 0) for r in rows}
         linha_to_registro_id = {int(r.linha): int(r.id) for r in rows}
@@ -111,7 +131,8 @@ class FiscalScanner:
         else:
             rows_agg = rows
             fonte_base = rows
-        # --- 2.0) FILTRO POR SITUAÇÃO DO DOCUMENTO (C100 COD_SIT) ---
+        scan_report["rows_agg"] = len(rows_agg)
+        # --- 2.0 FILTRO POR SITUAÇÃO DO DOCUMENTO (C100 COD_SIT) ---
         # COD_SIT: 06 = complementar / 07 = cancelada
         c100_sit_skip_ids: set[int] = set()
 
@@ -179,7 +200,9 @@ class FiscalScanner:
 
             # outros registros: mantém
             rows_limpas.append(r)
-        # --- 2.2) ENRIQUECER rows_like com registro_id real (quando aplicar_revisoes=True) ---
+        rows_limpas: list[Any] = []
+        ids_pf_detectados: set[int] = set()
+        # --- 2.2 ENRIQUECER rows_like com registro_id real (quando aplicar_revisoes=True) ---
         # Isso garante anchor_registro_id e evita registro_id=0 nos AGGs.
 
         for r in rows_limpas:
@@ -210,7 +233,9 @@ class FiscalScanner:
 
             except Exception:
                 pass
-
+        scan_report["rows_limpas"] = len(rows_limpas)
+        scan_report["pf_bloqueados"] = len(ids_pf_detectados)
+        scan_report["c100_sit_skip"] = len(c100_sit_skip_ids)
         # -------------------------------------------------
         # 2.3) Mapa 0200 (COD_ITEM -> NCM) usando fonte_base
         # -------------------------------------------------
@@ -322,6 +347,7 @@ class FiscalScanner:
                     meta=meta,
                 )
             )
+            scan_report["dtos_total"] = len(dtos)
 
         # -----------------------------
         # 4) Injetar META_FISCAL e agregadores (sempre usando rows_limpas)
@@ -335,97 +361,71 @@ class FiscalScanner:
 
         meta_fiscal = montar_meta_fiscal(rows_limpas, catalogo=cat, debug=False)
 
-        if meta_fiscal:
-            # garantir contexto também no meta (se DTO suportar)
-            try:
-                meta_fiscal.versao_id = versao_id
-                meta_fiscal.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+        if isinstance(meta_fiscal, RegistroFiscalDTO):
+            meta_fiscal.versao_id = versao_id
+            meta_fiscal.empresa_id = empresa_id_ctx
+
             dtos.append(meta_fiscal)
+            scan_report["agregadores_criados"].append("META_FISCAL")
 
         c100_ent = montar_c100_entrada_relevante_agg(rows_limpas)
-
         if c100_ent:
-            try:
-                c100_ent.versao_id = versao_id
-                c100_ent.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c100_ent, versao_id, empresa_id_ctx)
             dtos.append(c100_ent)
+            scan_report["agregadores_criados"].append("C100_ENT_AGG")
 
         c170_saida = montar_c170_saida_agg(rows_limpas)
-
         if c170_saida:
-            try:
-                c170_saida.versao_id = versao_id
-                c170_saida.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c170_saida, versao_id, empresa_id_ctx)
             dtos.append(c170_saida)
+            scan_report["agregadores_criados"].append("C170_SAIDA_AGG")
 
         c170_insumo = montar_c170_insumo_agg(rows_limpas)
         if c170_insumo:
-            try:
-                c170_insumo.versao_id = versao_id
-                c170_insumo.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c170_insumo, versao_id, empresa_id_ctx)
             dtos.append(c170_insumo)
-
+            scan_report["agregadores_criados"].append("C170_INSUMO_AGG")
 
         c190_exp = montar_c190_export_agg(rows_limpas)
         if c190_exp:
-            try:
-                c190_exp.versao_id = versao_id
-                c190_exp.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c190_exp, versao_id, empresa_id_ctx)
             dtos.append(c190_exp)
+            scan_report["agregadores_criados"].append("C190_EXPORT_AGG")
         else:
             c170_exp = montar_c170_export_agg(rows_limpas)
             if c170_exp:
-                try:
-                    c170_exp.versao_id = versao_id
-                    c170_exp.empresa_id = empresa_id_ctx
-                except Exception:
-                    pass
+                aplicar_contexto(c170_exp, versao_id, empresa_id_ctx)
                 dtos.append(c170_exp)
+                scan_report["agregadores_criados"].append("C170_EXPORT_AGG")
 
         c190_ind = montar_c190_ind_torrado_agg(rows_limpas)
         if c190_ind:
-            try:
-                c190_ind.versao_id = versao_id
-                c190_ind.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c190_ind, versao_id, empresa_id_ctx)
             dtos.append(c190_ind)
+            scan_report["agregadores_criados"].append("C190_IND_AGG")
         else:
-
             c170_ind = montar_c170_ind_torrado_agg(rows_limpas)
             if c170_ind:
-                try:
-                    c170_ind.versao_id = versao_id
-                    c170_ind.empresa_id = empresa_id_ctx
-                except Exception:
-                    pass
+                aplicar_contexto(c170_ind, versao_id, empresa_id_ctx)
                 dtos.append(c170_ind)
+                scan_report["agregadores_criados"].append("C170_IND_AGG")
 
         c190_agg = montar_c190_agg(rows_limpas)
         if c190_agg:
-            try:
-                c190_agg.versao_id = versao_id
-                c190_agg.empresa_id = empresa_id_ctx
-            except Exception:
-                pass
+            aplicar_contexto(c190_agg, versao_id, empresa_id_ctx)
             dtos.append(c190_agg)
+            scan_report["agregadores_criados"].append("C190_AGG")
 
         # -----------------------------
         # 5) Executar motor fiscal
         # -----------------------------
         for d in dtos:
             if (d.reg or "").strip() == "META_FISCAL":
-                print("[META_FISCAL DTO] dados=", d.dados, flush=True)
+                logger.debug(
+                    "META_FISCAL DTO | versao_id=%s | dados=%s",
+                    versao_id,
+                    d.dados,
+                )
                 break
 
         dominio = DOM_GERAL
@@ -451,6 +451,13 @@ class FiscalScanner:
             dominio = DOM_GERAL
 
         result = executar_varredura(dtos, capturar_erros=True, dominio=dominio)
+        logger.info(
+            "SCAN varredura concluída | versao_id=%s | dominio=%s | apontamentos_brutos=%s | erros_regras=%s",
+            versao_id,
+            dominio,
+            len(result.apontamentos),
+            len(result.erros),
+        )
 
                 # -----------------------------
         # 6) Limpeza profissional (apaga pendentes e preserva resolvidos se solicitado)
@@ -636,19 +643,37 @@ class FiscalScanner:
         if to_insert:
             db.bulk_save_objects(to_insert)
 
-
-
-        logger.warning("SCAN FINAL | versao_id=%s | descartados_sem_fk=%s", versao_id, descartados_sem_fk)
-
+        logger.warning(
+            "SCAN descartes sem FK | versao_id=%s | descartados_sem_fk=%s",
+            versao_id,
+            descartados_sem_fk,
+        )
         # -----------------------------
         # retorno final (telemetria)
         # -----------------------------
         total_c170_processados = len([d for d in dtos if d.reg == "C170" and not getattr(d, "is_pf", False)])
 
+        scan_report["dtos_c170"] = len(
+            [d for d in dtos if d.reg == "C170" and not getattr(d, "is_pf", False)]
+        )
+
+        logger.info(
+            "SCAN resumo | versao_id=%s | rows_base=%s | rows_agg=%s | rows_limpas=%s | dtos_total=%s | c170_processados=%s | apontamentos_gerados=%s | atualizados_preservados=%s | descartados_sem_fk=%s",
+            versao_id,
+            scan_report["rows_base"],
+            scan_report["rows_agg"],
+            scan_report["rows_limpas"],
+            scan_report["dtos_total"],
+            scan_report["dtos_c170"],
+            len(to_insert),
+            len(to_update_mappings),
+            descartados_sem_fk,
+        )
         return {
             "apontamentos_gerados": len(to_insert),
             "erros_regras": result.erros,
             "atualizados_preservados": len(to_update_mappings),
             "descartados_sem_fk": int(descartados_sem_fk),
             "total_c170_processados": int(total_c170_processados),
+            "relatorio": scan_report,
         }

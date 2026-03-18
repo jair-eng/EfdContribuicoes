@@ -13,7 +13,7 @@ from app.services.revisao_override_m_service import (
     extrair_credito_total_do_bloco_m,
 )
 from app.sped.blocoM.blocoM import construir_bloco_m_v3
-from app.sped.bloco_0.bloco_0_0900 import aplicar_0900_se_necessario
+from app.sped.bloco_0.bloco_0_0900 import aplicar_0900_se_necessario, recalcular_0990_bloco0
 from app.sped.bloco_1.builder import (
      montar_bloco_1_1100_1500_cumulativo, extrair_creditos_mes_bloco_m
 )
@@ -186,8 +186,7 @@ def exportar_sped(
                 rid=rid_int,
                 linhas=linhas,
             )
-            if rid_int:
-                ind_oper = _ind_oper_pai_c100(rid_int)
+
 
             # Conservador: se não achou pai/ind_oper, NÃO soma
             if not ind_oper:
@@ -257,6 +256,7 @@ def exportar_sped(
             linhas_sped=conteudo_sem_m,
             periodo_yyyymm=int(periodo_0000) if periodo_0000 else None,
         )
+        conteudo_sem_m = recalcular_0990_bloco0(conteudo_sem_m)
 
         # Agora sim, parse do conteúdo final (já com 0900 se inserido)
         parsed = parse_sped_from_lines(conteudo_sem_m)

@@ -56,6 +56,10 @@ def aplicar_revisoes_insert(
         lr = int(rv.get("linha_ref") or 0)
         return -lr if lr > 0 else 0
 
+    def _renumerar_resultado() -> None:
+        for i, l in enumerate(resultado, start=1):
+            l.linha = i
+
     def _escolher_vencedoras(lista: List[Dict]) -> List[Dict]:
         preparadas = []
         for rv in lista:
@@ -97,7 +101,7 @@ def aplicar_revisoes_insert(
                 return idx
         return -1
 
-    #Trazeno a conta
+    #Trazendo a conta
     cod_cta_padrao_0500 = resolver_cod_cta_padrao_0500(linhas_base)
 
     def _criar_linha_inserida(rv: Dict,alvo: "LinhaLogica",linhas_base: list["LinhaLogica"],cod_cta_padrao_0500: str,
@@ -140,10 +144,6 @@ def aplicar_revisoes_insert(
                 revisao_id=int(rv.get("id") or 0) or None,
             )
 
-            print("[DBG INSERIDA REG]", nova.reg, flush=True)
-            print("[DBG INSERIDA DADOS_LEN]", len(nova.dados or []), flush=True)
-            print("[DBG INSERIDA DADOS_FIM]", (nova.dados or [])[-3:], flush=True)
-
 
             return nova
 
@@ -158,9 +158,15 @@ def aplicar_revisoes_insert(
             continue
 
         alvo = resultado[idx]
-        nova = _criar_linha_inserida(rv, alvo)
+        nova = _criar_linha_inserida(
+            rv,
+            alvo,
+            linhas_base,
+            cod_cta_padrao_0500,
+        )
         if nova:
             resultado.insert(idx, nova)
+            _renumerar_resultado()
 
     # INSERT_AFTER depois
     for rv in inserts_after_final:
@@ -172,10 +178,10 @@ def aplicar_revisoes_insert(
         nova = _criar_linha_inserida(rv,alvo,linhas_base,cod_cta_padrao_0500,)
         if nova:
             resultado.insert(idx + 1, nova)
+            _renumerar_resultado()
 
     # renumera
-    for i, l in enumerate(resultado, start=1):
-        l.linha = i
+    _renumerar_resultado()
 
     print(
         f"OVERLAY_INSERT> final_lines={len(resultado)} "

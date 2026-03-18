@@ -40,6 +40,23 @@ class NfIcmsBase(Base):
     fonte = Column(String(20), nullable=False, default="EFD_ICMS_IPI")
     nome_arquivo = Column(String(255), nullable=True)
 
+    cod_part = Column(String(60), nullable=True, index=True)
+
+    participante_nome = Column(String(255), nullable=True)
+    participante_cod_pais = Column(String(10), nullable=True)
+
+    participante_cnpj = Column(String(14), nullable=True, index=True)
+    participante_cpf = Column(String(11), nullable=True, index=True)
+    participante_ie = Column(String(30), nullable=True)
+
+    participante_cod_mun = Column(String(10), nullable=True)
+    participante_suframa = Column(String(30), nullable=True)
+
+    participante_end = Column(String(255), nullable=True)
+    participante_num = Column(String(20), nullable=True)
+    participante_compl = Column(String(255), nullable=True)
+    participante_bairro = Column(String(100), nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(
         DateTime,

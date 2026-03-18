@@ -17,10 +17,16 @@ from app.icms_ipi.icms_helpers import (
 class ParticipanteIcms:
     cod_part: str
     nome: str | None
+    cod_pais: str | None
     cnpj: str | None
     cpf: str | None
     ie: str | None
     cod_mun: str | None
+    suframa: str | None
+    end: str | None
+    num: str | None
+    compl: str | None
+    bairro: str | None
 
 
 @dataclass
@@ -45,7 +51,16 @@ class NfIcmsPreviewNota:
     vl_icms: Decimal
     cod_part: str | None = None
     participante_nome: str | None = None
+    participante_cod_pais: str | None = None
     participante_cnpj: str | None = None
+    participante_cpf: str | None = None
+    participante_ie: str | None = None
+    participante_cod_mun: str | None = None
+    participante_suframa: str | None = None
+    participante_end: str | None = None
+    participante_num: str | None = None
+    participante_compl: str | None = None
+    participante_bairro: str | None = None
     ind_oper: str | None = None
     cod_sit: str | None = None
     cod_mod: str | None = None
@@ -152,10 +167,16 @@ def parse_sped_icms_ipi_preview(
                     participantes[cod_part] = ParticipanteIcms(
                         cod_part=cod_part,
                         nome=fields[1] if len(fields) > 1 else None,
+                        cod_pais=fields[2] if len(fields) > 2 else None,
                         cnpj=fields[3] if len(fields) > 3 else None,
                         cpf=fields[4] if len(fields) > 4 else None,
                         ie=fields[5] if len(fields) > 5 else None,
                         cod_mun=fields[6] if len(fields) > 6 else None,
+                        suframa=fields[7] if len(fields) > 7 else None,
+                        end=fields[8] if len(fields) > 8 else None,
+                        num=fields[9] if len(fields) > 9 else None,
+                        compl=fields[10] if len(fields) > 10 else None,
+                        bairro=fields[11] if len(fields) > 11 else None,
                     )
 
             elif reg == "0200":
@@ -198,7 +219,16 @@ def parse_sped_icms_ipi_preview(
                     vl_icms=Decimal("0"),
                     cod_part=cod_part,
                     participante_nome=part.nome if part else None,
-                    participante_cnpj=(part.cnpj or part.cpf) if part else None,
+                    participante_cod_pais=part.cod_pais if part else None,
+                    participante_cnpj=part.cnpj if part else None,
+                    participante_cpf=part.cpf if part else None,
+                    participante_ie=part.ie if part else None,
+                    participante_cod_mun=part.cod_mun if part else None,
+                    participante_suframa=part.suframa if part else None,
+                    participante_end=part.end if part else None,
+                    participante_num=part.num if part else None,
+                    participante_compl=part.compl if part else None,
+                    participante_bairro=part.bairro if part else None,
                     ind_oper=ind_oper,
                     cod_sit=cod_sit,
                     cod_mod=cod_mod,

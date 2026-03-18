@@ -8,7 +8,7 @@ from app.fiscal.constants import DOM_CAFE
 from app.fiscal.settings_fiscais import CSTS_TRIB_NCUM
 from app.db.models.efd_registro import EfdRegistro
 from app.db.models import EfdVersao, NfIcmsItem
-from app.icms_ipi.icms_helpers import _criar_revisao_insert_c170_faltante, _ja_existe_revisao_insert_para_item
+from app.icms_ipi.icms_c170_utils import _ja_existe_revisao_insert_para_item, _criar_revisao_insert_c170_faltante
 from app.icms_ipi.icms_ipi_cruzamento_service import cruzar_versao_com_icms_ipi
 from app.services.c170_service import revisar_c170_lote
 from app.services.dominio_service import resolver_dominio_por_versao

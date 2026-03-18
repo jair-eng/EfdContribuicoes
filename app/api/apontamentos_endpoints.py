@@ -109,6 +109,7 @@ def reprocessar_apontamentos(
         ) or 0
         dbg(f"APOS DELETE: total={int(deleted_count)} (esperado 0)")
 
+
         # -----------------------------
         # 3) Scan (recria apontamentos)
         # -----------------------------
@@ -145,6 +146,43 @@ def reprocessar_apontamentos(
                 versao.dominio = dom_emp
                 db.add(versao)
                 db.flush()
+
+        # -----------------------------
+        # 3.1) Pré-popular notas ausentes via ICMS/IPI
+        # -----------------------------
+        res_pop = None
+        if aplicar_revisoes:
+            step = "PRE_POPULAR_ICMS"
+            dbg("STEP PRE_POPULAR_ICMS")
+
+            try:
+                periodo = None
+                arquivo = getattr(versao, "arquivo", None)
+                if arquivo:
+                    periodo = str(getattr(arquivo, "periodo", "") or "").strip() or None
+
+                from app.icms_ipi.icms_ipi_insercao_notas_service import inserir_notas_icms_ausentes_na_efd
+
+                res_pop = inserir_notas_icms_ausentes_na_efd(
+                    db,
+                    versao_origem_id=int(versao_id),
+                    empresa_id=int(empresa_id),
+                    periodo=periodo,
+                    apontamento_id=None,
+
+                )
+                db.flush()
+                dbg(f"OK PRE_POPULAR_ICMS | res_pop={res_pop}")
+
+            except Exception as e:
+                dbg(f"ERRO PRE_POPULAR_ICMS: {repr(e)}")
+                dbg("TRACEBACK PRE_POPULAR_ICMS:\n" + traceback.format_exc())
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"BUG step=PRE_POPULAR_ICMS: {str(e)}",
+                )
+
+        step = "SCAN_EXEC"
 
         res = FiscalScanner.scan_versao(
             db,
@@ -230,6 +268,7 @@ def reprocessar_apontamentos(
             "aplicar_revisoes": aplicar_revisoes,
             "preservar_resolvidos": preservar_resolvidos,
             "elapsed_s": round(time.time() - t0, 2),
+            "pre_pop_icms_result": res_pop,
         }
 
     except HTTPException as e:

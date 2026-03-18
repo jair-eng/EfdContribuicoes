@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import EfdRegistro
 from app.db.models.nf_icms_item import NfIcmsItem
-from app.icms_ipi.icms_helpers import _campo, _campo_dec, _norm_cod_item, _as_decimal, _s, _only_digits, \
-    _registro_insercao_alvo, _criar_revisao_insert_c170_faltante, _ja_existe_revisao_insert_para_item
+from app.icms_ipi.icms_c170_utils import _registro_insercao_alvo, _criar_revisao_insert_c170_faltante
+from app.icms_ipi.icms_helpers import _campo, _campo_dec, _norm_cod_item, _as_decimal, _s, _only_digits
 from app.icms_ipi.icms_ipi_funcoes import _eh_c170, _eh_c100
 from app.icms_ipi.icms_ipi_vinculo_service import vincular_documento_icms_ipi
 from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes

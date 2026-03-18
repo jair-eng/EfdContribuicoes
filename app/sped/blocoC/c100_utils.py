@@ -3,8 +3,13 @@ from __future__ import annotations
 from __future__ import annotations
 from typing import Optional, List, Any, Dict
 from sqlalchemy.orm import Session
+
+from app.db.models import NfIcmsItem
 from app.db.models.efd_revisao import EfdRevisao
 from app.db.models.efd_registro import EfdRegistro
+from app.icms_ipi.icms_helpers import _only_digits, fmt_sped_num, _campo
+from app.icms_ipi.icms_ipi_funcoes import _eh_c100
+from app.services.versao_overlay_service import carregar_linhas_logicas_com_revisoes
 from app.sped.formatter import formatar_linha
 
 
@@ -139,4 +144,121 @@ def recalcular_c990(linhas: list[str]) -> list[str]:
         linhas[idx_c990] = f"|C990|{qtd}|"
 
     return linhas
+
+def criar_revisoes_c100_ausente(
+    db: Session,
+    *,
+    versao_origem_id: int,
+    empresa_id: int,
+    periodo: str | None = None,
+):
+    """
+    Cria revisões INSERT_AFTER de C100 quando a nota existe
+    no ICMS/IPI mas não existe no EFD Contribuições.
+    """
+
+    linhas = carregar_linhas_logicas_com_revisoes(
+        db,
+        versao_origem_id=versao_origem_id,
+    )
+
+    chaves_existentes: set[str] = set()
+
+    for linha in linhas:
+        if not _eh_c100(linha):
+            continue
+
+        dados = list(getattr(linha, "dados", []) or [])
+        chave = _only_digits(_campo(dados, 7))
+        if chave:
+            chaves_existentes.add(chave)
+
+    print("[DBG C100_EXISTENTES]", len(chaves_existentes), flush=True)
+
+    notas_icms = (
+        db.query(NfIcmsItem.nf_icms_base_id)
+        .filter(NfIcmsItem.empresa_id == empresa_id)
+        .distinct()
+        .all()
+    )
+
+    nf_ids = [int(n[0]) for n in notas_icms]
+
+    from app.db.models import NfIcmsBase
+
+    nfs = (
+        db.query(NfIcmsBase)
+        .filter(NfIcmsBase.id.in_(nf_ids))
+        .all()
+    )
+
+    for nf in nfs:
+
+        chave = _only_digits(nf.chave_nfe)
+
+        if not chave:
+            continue
+
+        if chave in chaves_existentes:
+            continue
+
+        print("[DBG C100_FALTANTE]", chave, flush=True)
+
+        linha_c100 = montar_linha_c100_de_icms(nf)
+
+        rv = EfdRevisao(
+            versao_origem_id=int(versao_origem_id),
+            versao_revisada_id=None,
+            registro_id=None,
+            reg="C100",
+            acao="INSERT_AFTER",
+            revisao_json={
+                "linha_nova": linha_c100,
+                "linha_referencia": 0,
+                "origem": "ICMS_IPI",
+                "nf_icms_base_id": int(nf.id),
+                "motivo": "Nota presente no ICMS/IPI e ausente na EFD Contribuições",
+            },
+            motivo_codigo="CONTRIB_SEM_C100_V1",
+        )
+
+        db.add(rv)
+
+    db.flush()
+
+
+def montar_linha_c100_de_icms(nf):
+    campos = [
+        "C100",
+        "0",
+        "1",
+        "",
+        "55",
+        "00",
+        nf.serie or "",
+        nf.num_doc or "",
+        nf.chave_nfe or "",
+        nf.dt_doc.strftime("%d%m%Y") if nf.dt_doc else "",
+        nf.dt_doc.strftime("%d%m%Y") if nf.dt_doc else "",
+        fmt_sped_num(nf.vl_doc),
+        "0",
+        "0",
+        "0",
+        fmt_sped_num(nf.vl_doc),
+        "0",
+        "0",
+        "0",
+        "0",
+        fmt_sped_num(nf.vl_doc),
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+    ]
+
+    return "|" + "|".join(campos) + "|"
 
