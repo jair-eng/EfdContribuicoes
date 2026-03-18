@@ -1,1 +1,8 @@
-__pycache__/ 
+__pycache__/
+.venv/
+logs/
+tmp_uploads/
+*.sped
+*.pyc
+.DS_Store
+Thumbs.db
